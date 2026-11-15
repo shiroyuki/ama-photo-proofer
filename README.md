@@ -90,6 +90,20 @@ Desktop tests cover the Settings panel and unavailable-Ollama warnings, date/tim
 
 Packaging uses electron-builder (DMG/ZIP on macOS, NSIS on Windows, AppImage on Linux). Release installers need platform signing credentials for normal public distribution. ExifTool requires Perl on macOS/Linux; Windows uses its bundled executable. Temporary JPEG previews are generated outside the card. No cloud account or network connection is needed for review.
 
+### GitHub Actions builds
+
+Three independent workflows build the app on native GitHub-hosted runners:
+
+| Workflow | Architectures | Downloadable installers |
+| --- | --- | --- |
+| [Build macOS](.github/workflows/build-macos.yml) | Apple Silicon (arm64), Intel (x64) | DMG and ZIP for each architecture |
+| [Build Linux](.github/workflows/build-linux.yml) | x64 | AppImage |
+| [Build Windows](.github/workflows/build-windows.yml) | x64 | NSIS EXE |
+
+Each workflow runs on pushes to `main`, `v*` tags, pull requests targeting `main`, or **Run workflow** in the repository’s Actions tab. Each native build installs locked dependencies with Node.js 24 and `npm ci`, runs unit tests, regenerates icons, builds the app, and packages its installer. The macOS architectures use separate native runners so Sharp’s native binaries match the target.
+
+Download installers from the run’s **Artifacts** section; artifacts are kept for seven days. CI builds are unsigned and do not publish GitHub Releases. No signing or publishing secrets are required. Action dependencies are pinned to verified commit hashes, and workflow tokens have read-only repository permissions. Desktop UI tests remain available through `npm run test:desktop` and are not part of these installer workflows.
+
 ## Sample photo credits
 
 The offline demo includes nature photographs downloaded from [Unsplash](https://unsplash.com/license). Source images: [mountains](https://images.unsplash.com/photo-1464822759023-fed622ff2c3b), [wildlife landscape](https://images.unsplash.com/photo-1472396961693-142e6e269027), [forest](https://images.unsplash.com/photo-1441974231531-c6227db76b6e), [lakeside](https://images.unsplash.com/photo-1470770841072-f978cf4d019e), [misty sunrise](https://images.unsplash.com/photo-1470252649378-9c29740c9fa8), and [mountain valley](https://images.unsplash.com/photo-1469474968028-56623f02e42e). The sample filenames and metadata are illustrative.
