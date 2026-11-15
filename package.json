@@ -1,0 +1,74 @@
+{
+  "name": "photo-proofer",
+  "version": "0.4.1",
+  "private": true,
+  "description": "A quiet, local-first memory card photo reviewer",
+  "main": "dist-electron/electron/main.js",
+  "scripts": {
+    "dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron . --dev\"",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build": "tsc --noEmit && npm run build:electron && vite build",
+    "start": "npm run build && electron .",
+    "test": "vitest run",
+    "test:desktop": "npm run build && playwright test",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "exiftool-vendored": "^35.0.0",
+    "lucide": "^0.468.0",
+    "sharp": "^0.35.5",
+    "systeminformation": "^5.33.23"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^24.0.0",
+    "concurrently": "^9.0.0",
+    "electron": "^45.3.2",
+    "electron-builder": "^26.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0",
+    "wait-on": "^8.0.0"
+  },
+  "build": {
+    "appId": "studio.ama.photo-proofer",
+    "productName": "Photo Proofer",
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "LICENSE",
+      "NOTICE",
+      "README.md"
+    ],
+    "asarUnpack": [
+      "node_modules/exiftool-vendored*/**",
+      "node_modules/@img/**",
+      "node_modules/sharp/**"
+    ],
+    "mac": {
+      "category": "public.app-category.photography",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "Photo Proofer imports the original photos and videos you choose into your Photos library."
+      }
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    },
+    "directories": {
+      "output": "release"
+    },
+    "icon": "public/icon.png",
+    "copyright": "Copyright © 2026 Juti Noppornpitak"
+  },
+  "author": "Juti Noppornpitak",
+  "license": "Apache-2.0"
+}
