@@ -50,7 +50,10 @@ function visit(name, parent, optional = false) {
 for (const name of Object.keys(app.dependencies)) visit(name, root);
 visit('electron', root);
 const electron = resolvePackage('electron', root);
-const electronDist = path.join(electron, 'dist');
+// Electron 45 installs its runtime lazily. A clean npm ci has no dist directory
+// until its entry point resolves (and, if needed, downloads) the executable.
+require(electron);
+const electronDist = process.env.ELECTRON_OVERRIDE_DIST_PATH || path.join(electron, 'dist');
 const electronEntry = entries.find(entry => entry.name === 'electron');
 electronEntry.notices.push(...licenseFiles(electronDist).filter(notice => !notice.name.endsWith('.html')));
 const output = path.join(root, 'public', 'licenses');
