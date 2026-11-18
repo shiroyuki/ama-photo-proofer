@@ -1,3 +1,4 @@
+import type { ReviewStatus } from './selection';
 export type ThemePreference = 'system' | 'light' | 'dark';
 export type MediaKind = 'jpeg' | 'raw' | 'image' | 'video';
 export interface MediaFile {
@@ -33,9 +34,25 @@ export interface PhotoEvent {
   start: string;
   end: string;
 }
+export const DEFAULT_EVENT_GAP_MINUTES = 30;
+export function validEventGap(value: unknown): value is number { return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 10080; }
+export interface LibrarySettings { eventGapMinutes: number; bookmarks: Source[] }
 export interface Source { name: string; path: string }
 export interface ScanProgress { scanned: number; total: number; files: MediaFile[]; done: boolean; source: Source; skipped: number }
+export interface SessionWarning { sourcePath: string; message: string }
+export interface EventSummaryUpdate { sourcePath?: string; id?: string; summary?: string; error?: string; completed?: number; total?: number; done?: boolean; cancelled?: boolean }
 export interface DesktopAPI {
+  getLibrarySettings(): Promise<LibrarySettings>;
+  setEventGap(minutes: number): Promise<number>;
+  toggleBookmark(folder: string): Promise<Source[]>;
+  openBookmark(folder: string): Promise<Source>;
+  reindex(source: Source): Promise<void>;
+  getEventSummaries(): Promise<Record<string, string>>;
+  onEventSummary(callback: (update: EventSummaryUpdate) => void): () => void;
+  onOpenAbout(callback: () => void): () => void;
+  getPhotoReviews(ids: string[]): Promise<Record<string, ReviewStatus>>;
+  setPhotoReviews(ids: string[], status: ReviewStatus | null): Promise<boolean>;
+  onSessionWarning(callback: (warning: SessionWarning) => void): () => void;
   getOllamaStatus(): Promise<OllamaStatus>;
   setOllamaEnabled(enabled: boolean): Promise<OllamaStatus>;
   getPhotoTags(ids: string[]): Promise<Record<string, string[]>>;
@@ -52,7 +69,7 @@ export interface DesktopAPI {
   exportToPhotos(ids: string[]): Promise<ExportResult>;
   getExportLocation(): Promise<string>;
   chooseExportLocation(): Promise<string | null>;
-  exportFiles(ids: string[]): Promise<ExportResult>;
+  exportFiles(ids: string[], mode?: 'selection' | 'accepted' | 'event'): Promise<ExportResult>;
   cancelExport(): Promise<void>;
   onExportProgress(callback: (progress: ExportProgress) => void): () => void;
   onProgress(callback: (progress: ScanProgress) => void): () => void;
@@ -80,13 +97,14 @@ export function pairPhotos(files: MediaFile[]): Photo[] {
     return { id: key, files, primary, raw: files.find(f => f.kind === 'raw') };
   }).sort((a, b) => Date.parse(a.primary.capturedAt) - Date.parse(b.primary.capturedAt) || a.primary.name.localeCompare(b.primary.name));
 }
-export function groupEvents(photos: Photo[]): PhotoEvent[] {
+export function groupEvents(photos: Photo[], gapMinutes = DEFAULT_EVENT_GAP_MINUTES): PhotoEvent[] {
+  if (!validEventGap(gapMinutes)) throw new Error('Invalid event gap.');
   const events: PhotoEvent[] = [];
   for (const photo of photos) {
     const last = events.at(-1);
     const taken = photo.primary.capturedAt;
     // Compare adjacent captures, not the event's start; midnight never splits an event.
-    if (!last || Date.parse(taken) - Date.parse(last.end) > 30 * 60 * 1000) {
+    if (!last || Date.parse(taken) - Date.parse(last.end) > gapMinutes * 60 * 1000) {
       events.push({ id: photo.id, photos: [photo], start: taken, end: taken });
     } else {
       last.photos.push(photo);
@@ -97,7 +115,7 @@ export function groupEvents(photos: Photo[]): PhotoEvent[] {
 }
 
 export interface ExportProgress { copied: number; total: number; current: string }
-export interface ExportResult { target?: 'folder' | 'photos'; importedItems?: number; copied: number; total: number; cancelled: boolean; destination: string; failures: { name: string; message: string }[] }
+export interface ExportResult { warnings?: string[]; target?: 'folder' | 'photos'; importedItems?: number; copied: number; total: number; cancelled: boolean; destination: string; failures: { name: string; message: string }[] }
 
 export interface OllamaStatus {
   model: 'gemma4:e2b';

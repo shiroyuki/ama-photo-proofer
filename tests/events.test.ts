@@ -46,3 +46,10 @@ it('groups continuous events by their starting date and then chronological time'
   expect(days[0].events[2].photos).toHaveLength(2);
   expect(days[0].events[2].end).toBe('2026-11-13T00:10:00');
 });
+
+it('keeps an exact custom gap together across midnight and splits only longer gaps', () => {
+  const photos = pairPhotos([file('A.JPG', '2026-11-12T23:55:00'), file('B.JPG', '2026-11-13T00:05:00'), file('C.JPG', '2026-11-13T00:15:01')]);
+  expect(groupEvents(photos, 10).map(event => event.photos.length)).toEqual([2, 1]);
+  expect(groupEvents(photos, 30)).toHaveLength(1);
+  expect(() => groupEvents(photos, 0)).toThrow('Invalid event gap');
+});

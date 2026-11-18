@@ -1,6 +1,28 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DesktopAPI, ScanProgress, ExportProgress, TagProgress } from '../shared/model';
+import type { DesktopAPI, ScanProgress, ExportProgress, TagProgress, SessionWarning, EventSummaryUpdate } from '../shared/model';
 const api: DesktopAPI = {
+  getLibrarySettings: () => ipcRenderer.invoke('get-library-settings'),
+  setEventGap: minutes => ipcRenderer.invoke('set-event-gap', minutes),
+  toggleBookmark: folder => ipcRenderer.invoke('toggle-bookmark', folder),
+  openBookmark: folder => ipcRenderer.invoke('open-bookmark', folder),
+  reindex: source => ipcRenderer.invoke('reindex', source),
+  getEventSummaries: () => ipcRenderer.invoke('get-event-summaries'),
+  onEventSummary: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, data: EventSummaryUpdate) => callback(data);
+    ipcRenderer.on('event-summary', listener); return () => ipcRenderer.removeListener('event-summary', listener);
+  },
+  onOpenAbout: callback => {
+    const listener = () => callback();
+    ipcRenderer.on('open-about', listener);
+    return () => ipcRenderer.removeListener('open-about', listener);
+  },
+  getPhotoReviews: ids => ipcRenderer.invoke('get-photo-reviews', ids),
+  setPhotoReviews: (ids, status) => ipcRenderer.invoke('set-photo-reviews', ids, status),
+  onSessionWarning: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, data: SessionWarning) => callback(data);
+    ipcRenderer.on('session-warning', listener);
+    return () => ipcRenderer.removeListener('session-warning', listener);
+  },
   getOllamaStatus: () => ipcRenderer.invoke('get-ollama-status'),
   setOllamaEnabled: enabled => ipcRenderer.invoke('set-ollama-enabled', enabled),
   getPhotoTags: ids => ipcRenderer.invoke('get-photo-tags', ids),
@@ -21,7 +43,7 @@ const api: DesktopAPI = {
   exportToPhotos: ids => ipcRenderer.invoke('export-to-photos', ids),
   getExportLocation: () => ipcRenderer.invoke('get-export-location'),
   chooseExportLocation: () => ipcRenderer.invoke('choose-export-location'),
-  exportFiles: ids => ipcRenderer.invoke('export-files', ids),
+  exportFiles: (ids, mode) => ipcRenderer.invoke('export-files', ids, mode),
   cancelExport: () => ipcRenderer.invoke('cancel-export'),
   onExportProgress: callback => {
     const listener = (_event: Electron.IpcRendererEvent, data: ExportProgress) => callback(data);
