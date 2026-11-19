@@ -1,3 +1,5 @@
+import { openPanorama } from './panorama';
+import { openEditor } from './editor';
 import './style.css';
 import { themePreference, setThemePreference } from './theme';
 import { icon } from './icons';
@@ -12,25 +14,26 @@ const state = {
   eventGapMinutes: 30, gapDraft: '30', bookmarks: [] as Source[], bookmarkBusy: false, libraryReady: false,
   files: [] as MediaFile[], source: null as Source | null, sources: [] as Source[],
   selectedIds: new Set<string>(), anchorId: '', selectedId: '', eventId: '', filter: 'all', search: '', reviewFilter: 'all', labelFilters: [] as string[], labelOpen: false, labelActive: -1, full: false, raw: false,
-  info: true, loading: false, scanned: 0, total: 0, skipped: 0, demo: false,
+  info: true, loading: false, scanned: 0, total: 0, demo: false,
   cacheWarnings: [] as string[], runtimeErrors: [] as string[], size: 240, reverse: false, zoom: false, help: false, about: false, error: '',
-  exportOpen: false, exportMode: 'selection' as 'selection' | 'accepted' | 'event', exportEventId: '', exportLocation: '',
+  exportOpen: false, exportMode: 'selection' as 'selection' | 'accepted' | 'event', exportSelectionByEvent: false, exportEventId: '', exportLocation: '',
   exportBusy: false, exportCopied: 0, exportTotal: 0, exportCurrent: '', exportResult: null as ExportResult | null,
   exportError: '', choosingLocation: false, exportTarget: 'folder' as 'folder' | 'photos', photosAvailable: false,
   settingsOpen: false, settingsChecking: false, settingsBusy: false, settingsError: '', ollama: null as OllamaStatus | null,
   tagConfirmation: null as TagAction | null, tagConfirmationEpoch: 0, tagApprovedEpoch: -1, tagDeclinedEpoch: -1, tagDeferred: false, tagStopping: false,
-  summaryActive: false, summaryCompleted: 0, summaryTotal: 0, summaryCancelled: false, tagging: false, tagJobId: '', tagCompleted: 0, tagTotal: 0, tagSummary: '',
+  summaryActive: false, summaryCompleted: 0, summaryTotal: 0, tagging: false, tagJobId: '', tagCompleted: 0, tagTotal: 0, tagSummary: '',
 };
 let allPhotos: Photo[] = [];
 let events: PhotoEvent[] = [];
 let visible: Photo[] = [];
 let photoById = new Map<string, Photo>();
+const thumbnailRevisions = new Map<string, number>();
 let tagEpoch = 0;
 const tags = new Map<string, string[]>();
 const tagErrors = new Map<string, string>();
 const eventSummaries = new Map<string, string>();
 const eventSummaryErrors = new Map<string, string>();
-function resetEventSummaries() { eventSummaries.clear(); eventSummaryErrors.clear(); state.summaryActive = false; state.summaryCompleted = 0; state.summaryTotal = 0; state.summaryCancelled = false; }
+function resetEventSummaries() { eventSummaries.clear(); eventSummaryErrors.clear(); state.summaryActive = false; state.summaryCompleted = 0; state.summaryTotal = 0; }
 function pendingSummaryEvents() { return events.filter(event => event.photos.some(photo => photo.primary.kind !== 'video') && !eventSummaries.has(event.id)); }
 function eventSummaryMarkup(event: PhotoEvent) { const summary = eventSummaries.get(event.id); return summary ? `<small class="event-summary" title="${escape(summary)}">${escape(summary.replace(/-/g, ' '))}</small>` : ''; }
 function updateEventSummaryUI() {
@@ -69,9 +72,24 @@ function reportError(context: string, error: unknown) {
 }
 window.addEventListener('unhandledrejection', event => { reportError('The operation could not finish.', event.reason); });
 window.addEventListener('error', event => { if (event.message) reportError('An unexpected error occurred.', event.error ?? event.message); });
-const selected = () => photoById.get(state.selectedId);
+const selected = () => state.selectedIds.has(state.selectedId) ? photoById.get(state.selectedId) : undefined;
 const currentFile = (photo: Photo) => state.raw && state.selectedId === photo.id && photo.raw ? photo.raw : photo.primary;
-const url = (file: MediaFile, thumb = false) => file.id.startsWith('demo-') ? demoUrl(file.id) : `media://asset/${file.id}${thumb ? '?size=thumb' : ''}`;
+const canEdit = (file?: MediaFile) => !state.demo && !state.loading && (file?.kind === 'jpeg' || file?.kind === 'raw');
+function editButton(photo?: Photo, detail = false) {
+  const file = photo && currentFile(photo);
+  return file && canEdit(file) ? `<button class="button${detail ? ' compact detail-edit' : ''}" data-action="edit-photo">Edit ${file.kind === 'raw' ? 'RAW' : 'JPEG'}</button>` : '';
+}
+function url(file: MediaFile, thumbnailOf?: Photo) {
+  if (file.id.startsWith('demo-')) return demoUrl(file.id);
+  const source = `media://asset/${file.id}`;
+  if (!thumbnailOf) return source;
+  const params = new URLSearchParams({ size: 'thumb' });
+  const paired = file.id === thumbnailOf.primary.id ? thumbnailOf.raw : thumbnailOf.primary;
+  if (paired && paired.id !== file.id) params.set('paired', paired.id);
+  const revision = thumbnailRevisions.get(thumbnailOf.id);
+  if (revision) params.set('revision', String(revision));
+  return `${source}?${params}`;
+}
 // Keep the camera's local date/time even when its EXIF includes a timezone.
 const localDate = (date: string) => new Date(date.slice(0, 19));
 const day = (date: string, short = false) => localDate(date).toLocaleDateString('en-US', { month: short ? 'short' : 'long', day: 'numeric', ...(short ? {} : { year: 'numeric' }) });
@@ -114,13 +132,28 @@ function sidebar() {
   ${events.length ? groupEventsByDate(events).map(group => `<section class="event-date-group"><h3>${group.date}</h3>${group.events.map(event => `<button class="event-link ${state.eventId === event.id ? 'selected' : ''}" data-event="${escape(event.id)}"><span class="event-marker">${icon(localDate(event.start).getHours() < 17 ? 'Sun' : 'Moon', 15)}</span><span><strong>${time(event.start)} – ${time(event.end)}</strong>${event.start.slice(0, 10) !== event.end.slice(0, 10) ? `<small>to ${event.end.slice(0, 10)}</small>` : ''}${eventSummaryMarkup(event)}</span><span class="count">${event.photos.length}</span></button>`).join('')}</section>`).join('') : `<p class="side-hint">Your shoots, organized by date and time. A gap over ${state.eventGapMinutes} minutes starts a new event.</p>`}</div></div>
   </div><div class="sidebar-bottom"><button class="settings-button" data-action="settings">${icon('Settings2', 17)}Settings</button><button class="help-button" data-action="help">${icon('Keyboard', 17)}Keyboard shortcuts<span>?</span></button><button class="help-button" data-action="about">${icon('Info', 17)}About Photo Proofer</button></div></aside>`;
 }
-function toolbar() {
+function infoButton() {
+  return selected() ? btn('Info', 'Toggle photo details', 'info', state.info) : '';
+}
+function workspaceHeader() {
   const event = events.find(e => e.id === state.eventId);
-  return `<div class="titlebar"><span>${state.full ? 'Photo viewer' : 'Memory card workspace'}</span><span class="local-status"><span></span>Local workspace</span></div>
-  <header class="page-header"><div>${state.full ? `<button class="back-button" data-action="back">${icon('ArrowLeft', 16)}All thumbnails</button>` : `<div class="breadcrumb">Library ${icon('ChevronRight', 12)} ${escape(state.source?.name ?? 'Getting started')}</div>`}<h1>${state.full ? escape(selected() ? currentFile(selected()!).name : '') : event ? `${event.start.slice(0, 10)} ${time(event.start)}` : 'All captures'}${state.demo ? '<span class="demo-tag">Demo</span>' : ''}</h1><p>${state.full ? `${Math.max(0, visible.findIndex(p => p.id === state.selectedId) + 1)} of ${visible.length} captures` : allPhotos.length ? `${allPhotos.length} captures${state.files.length !== allPhotos.length ? ` from ${state.files.length} files` : ''} in ${events.length} events` : 'A little space to see what you captured.'}</p></div>
-  <div class="header-actions">${state.loading ? `<button class="button" data-action="cancel">${icon('X', 15)}Stop scan</button>` : ''}${btn('Info', 'Toggle photo details', 'info', state.info)}<button class="button primary" data-action="open" ${state.exportBusy ? 'disabled' : ''}>${icon('FolderOpen', 16)}Open folder</button>${allPhotos.length ? `<button class="button" data-action="export" ${state.demo ? 'disabled title="Export is available for your own files"' : state.loading ? 'disabled title="Finish scanning before exporting"' : ''}>${icon('ArrowUpRight', 16)}Export</button>` : ''}</div></header>
-  ${!state.full && allPhotos.length ? `<div class="toolbar"><div class="tabs" role="group" aria-label="Media type">${[['all', 'All media'], ['photo', 'Photos'], ['video', 'Videos']].map(([value, label]) => `<button class="tab ${state.filter === value ? 'selected' : ''}" data-filter="${value}" aria-pressed="${state.filter === value}">${value === 'video' ? icon('Film', 14) : value === 'photo' ? icon('Image', 14) : ''}${label}</button>`).join('')}</div>
-  <div class="view-tools">${captureSearch()}<button class="sort-button" data-action="sort" title="Reverse capture order">${state.reverse ? 'Newest first' : 'Oldest first'}${icon('ChevronDown', 14)}</button><div class="size-control">${icon('Grid2X2', 15)}<input id="thumbnail-size" type="range" min="160" max="360" value="${state.size}" aria-label="Thumbnail size"></div></div></div>${captureFilters()}` : ''}`;
+  const photo = selected();
+  const file = photo && currentFile(photo);
+  return `<header class="workspace-header"><div class="workspace-heading">
+    <div class="workspace-title">${state.full ? `<button class="back-button" data-action="back">${icon('ArrowLeft', 16)}All thumbnails</button>` : ''}<h1 title="${escape(file?.name ?? '')}">${state.full ? escape(file?.name) : event ? `${event.start.slice(0, 10)} ${time(event.start)}` : 'All captures'}</h1></div>
+    <div class="header-actions">
+      ${state.loading ? `<button class="button" data-action="cancel">${icon('X', 15)}Stop scan</button>` : ''}
+      ${!state.full && !state.demo && !state.loading && allPhotos.some(photo => photo.primary.kind !== 'video') ? '<button class="button" data-action="similar">Find similar photos</button>' : ''}
+      ${state.full && photo ? `${editButton(photo)}${photo.raw && photo.primary.kind === 'jpeg' ? `<button class="button compact" data-action="toggle-raw">${state.raw ? 'View JPEG' : 'View RAW'}<kbd>T</kbd></button>` : ''}${file?.kind !== 'video' ? btn(state.zoom ? 'ZoomOut' : 'ZoomIn', state.zoom ? 'Fit to window' : 'Zoom photo', 'zoom', state.zoom) : ''}` : ''}
+      ${allPhotos.length ? `<button class="button" data-action="export" ${state.demo ? 'disabled title="Export is available for your own files"' : state.loading ? 'disabled title="Finish scanning before exporting"' : ''}>${icon('ArrowUpRight', 16)}Export</button>` : ''}
+      <span class="info-control">${infoButton()}</span>
+    </div>
+  </div>
+  ${!state.full && allPhotos.length ? `<div class="capture-controls"><div class="tabs" role="group" aria-label="Media type">${[['all', 'All media'], ['photo', 'Photos'], ['video', 'Videos']].map(([value, label]) => `<button class="tab ${state.filter === value ? 'selected' : ''}" data-filter="${value}" aria-pressed="${state.filter === value}">${value === 'video' ? icon('Film', 14) : value === 'photo' ? icon('Image', 14) : ''}${label}</button>`).join('')}</div>
+  <div class="view-tools">${captureSearch()}<button class="sort-button" data-action="sort" title="Reverse capture order">${state.reverse ? 'Newest first' : 'Oldest first'}${icon('ChevronDown', 14)}</button><div class="size-control">${icon('Grid2X2', 15)}<input id="thumbnail-size" type="range" min="160" max="360" value="${state.size}" aria-label="Thumbnail size"></div></div></div>${captureFilters()}` : ''}
+  <div class="selection-controls">${selectionControls()}</div>
+  <div class="activity-panel" aria-label="Background activity">${activityProgress()}</div>
+  </header>`;
 }
 function labelSuggestions() {
   const counts = new Map<string, number>();
@@ -155,13 +188,14 @@ function addLabelFilter(label: string) {
   render(); root.querySelector<HTMLInputElement>('#search')?.focus();
   state.labelOpen = false; refreshLabelSuggestions();
 }
-function mediaMarkup(file: MediaFile, thumb: boolean) {
+function mediaMarkup(file: MediaFile, thumbnailOf?: Photo) {
+  const thumb = Boolean(thumbnailOf);
   if (file.kind === 'video') return `<video class="media-image ${thumb ? 'video-thumbnail' : ''}" src="${url(file)}" ${thumb ? 'preload="metadata" muted' : 'controls preload="metadata"'} aria-label="${escape(file.name)}"></video>${thumb ? `<span class="video-badge">${icon('Play', 12)}${file.duration ? `${Math.floor(file.duration / 60)}:${String(Math.floor(file.duration % 60)).padStart(2, '0')}` : 'Video'}</span>` : ''}`;
-  return `<img class="media-image" src="${url(file, thumb)}" alt="${escape(file.name)}" ${thumb ? 'loading="lazy"' : ''} draggable="false">`;
+  return `<img class="media-image" src="${escape(url(file, thumbnailOf))}" alt="${escape(file.name)}" ${thumb ? 'loading="lazy"' : ''} draggable="false">`;
 }
 function card(photo: Photo) {
   const file = currentFile(photo);
-  return `<button class="photo-card ${state.selectedIds.has(photo.id) ? 'is-selected' : ''} ${reviewStatus(photo) === 'rejected' ? 'is-rejected' : ''}" data-photo="${escape(photo.id)}" aria-label="${escape(file.name)}, ${time(file.capturedAt)}. Double-click to open." aria-pressed="${state.selectedIds.has(photo.id)}"><div class="thumbnail">${mediaMarkup(file, true)}<span class="review-indicator">${reviewBadge(photo)}</span>${photo.raw && photo.primary.kind === 'jpeg' ? `<span class="format-badge">JPEG + RAW</span>` : file.kind === 'raw' ? `<span class="format-badge">RAW</span>` : ''}</div><div class="photo-caption"><strong>${escape(file.stem)}</strong><span>${time(file.capturedAt)}</span></div><div class="photo-meta"><span>${escape(file.camera ?? (file.kind === 'video' ? 'Video' : 'Photo'))}</span><span>${file.kind === 'video' ? file.extension.toUpperCase() : file.aperture ? `ƒ/${escape(file.aperture)}` : file.extension.toUpperCase()}</span></div></button>`;
+  return `<button class="photo-card ${state.selectedIds.has(photo.id) ? 'is-selected' : ''} ${reviewStatus(photo) === 'rejected' ? 'is-rejected' : ''}" data-photo="${escape(photo.id)}" aria-label="${escape(file.name)}, ${time(file.capturedAt)}. Double-click to open." aria-pressed="${state.selectedIds.has(photo.id)}"><div class="thumbnail">${mediaMarkup(file, photo)}<span class="review-indicator">${reviewBadge(photo)}</span>${photo.raw && photo.primary.kind === 'jpeg' ? `<span class="format-badge">JPEG + RAW</span>` : file.kind === 'raw' ? `<span class="format-badge">RAW</span>` : ''}</div><div class="photo-caption"><strong>${escape(file.stem)}</strong><span>${time(file.capturedAt)}</span></div><div class="photo-meta"><span>${escape(file.camera ?? (file.kind === 'video' ? 'Video' : 'Photo'))}</span><span>${file.kind === 'video' ? file.extension.toUpperCase() : file.aperture ? `ƒ/${escape(file.aperture)}` : file.extension.toUpperCase()}</span></div></button>`;
 }
 function empty() {
   return `<div class="welcome"><div class="welcome-visual"><div class="frame-back"></div><div class="frame-front"><img class="welcome-logo" src="${import.meta.env.BASE_URL}logo.svg" alt=""><span>A fresh perspective.</span></div><div class="card-chip">${icon('HardDrive', 25)}</div></div><h2>Your next shoot starts here.</h2><p>Open a memory card or photo folder.<br>We’ll bring your captures together, one event at a time.</p><button class="button primary large" data-action="open">${icon('FolderOpen', 18)}Open a card or folder</button><button class="demo-button" data-action="demo">Explore a sample collection ${icon('ArrowUpRight', 14)}</button><div class="welcome-features"><span>${icon('Image', 16)}JPEG + RAW, together</span><span>${icon('Clock3', 16)}Events organized for you</span><span>${icon('Film', 16)}Video in the same view</span></div></div>`;
@@ -175,12 +209,13 @@ function gallery() {
 }
 function details() {
   const photo = selected();
-  if (!photo) return `<aside class="details"><div class="details-title"><h2>Photo details</h2>${btn('X', 'Hide photo details', 'info')}</div><div class="details-empty">${icon('Camera', 34)}<p>A closer look at your capture.</p><span>Select a photo to see its camera settings and file details.</span></div><div class="details-tip">${icon('Info', 16)}<p>JPEG and RAW files with the same name appear as one capture.</p></div></aside>`;
+  if (!state.info || !photo) return '';
   const file = currentFile(photo);
   const metadata = [['Camera', file.camera], ['Lens', file.lens], ['Taken', `${day(file.capturedAt)}<br>${time(file.capturedAt)}:${file.capturedAt.slice(17, 19)}`]];
-  return `<aside class="details"><div class="details-title"><h2>${file.kind === 'video' ? 'Video' : 'Photo'} details</h2>${btn('X', 'Hide photo details', 'info')}</div><div class="detail-preview ${reviewStatus(photo) === 'rejected' ? 'is-rejected' : ''}">${mediaMarkup(file, true)}</div><div class="detail-name"><h3>${escape(file.name)}</h3>${reviewStatus(photo) ? `<span class="detail-review ${reviewStatus(photo)}">${reviewStatus(photo) === 'accepted' ? 'Accepted' : 'Rejected'}</span>` : ''}<span>${sizeLabel(file.size)}${file.width && file.height ? ` <span class="dot-separator"></span> ${file.width} × ${file.height}` : ''}</span></div>
+  return `<aside class="details"><div class="details-title"><h2>${file.kind === 'video' ? 'Video' : 'Photo'} details</h2></div><div class="detail-preview ${reviewStatus(photo) === 'rejected' ? 'is-rejected' : ''}">${mediaMarkup(file, photo)}</div><div class="detail-name"><h3>${escape(file.name)}</h3>${reviewStatus(photo) ? `<span class="detail-review ${reviewStatus(photo)}">${reviewStatus(photo) === 'accepted' ? 'Accepted' : 'Rejected'}</span>` : ''}<span>${sizeLabel(file.size)}${file.width && file.height ? ` <span class="dot-separator"></span> ${file.width} × ${file.height}` : ''}</span></div>
   ${photo.raw && photo.primary.kind === 'jpeg' ? `<div class="version-toggle" role="group" aria-label="File version"><button data-action="jpeg" class="${!state.raw ? 'selected' : ''}" aria-pressed="${!state.raw}">JPEG</button><button data-action="raw" class="${state.raw ? 'selected' : ''}" aria-pressed="${state.raw}">RAW</button><kbd>T</kbd></div>` : ''}
-  ${file.kind === 'raw' ? '<div class="raw-note">Showing the camera’s embedded RAW preview.</div>' : ''}
+  ${!state.full ? editButton(photo, true) : ''}
+  ${file.kind === 'raw' ? '<div class="raw-note">Showing a RAW preview. Choose Edit RAW to develop the sensor data.</div>' : ''}
   <div class="exposure-grid"><div><span>ISO</span><strong>${escape(file.iso ?? '—')}</strong></div><div><span>Aperture</span><strong>${file.aperture ? `ƒ/${escape(file.aperture)}` : '—'}</strong></div><div><span>Shutter</span><strong>${escape(file.shutter ?? '—')}</strong></div></div><dl class="metadata">${metadata.map(([label, value]) => `<div><dt>${label}</dt><dd>${label === 'Taken' ? value : escape(value ?? 'Unavailable')}</dd></div>`).join('')}<div><dt>Format</dt><dd>${file.extension.toUpperCase()}${photo.files.length > 1 ? ` <span class="paired-label">${photo.files.length} paired files</span>` : ''}</dd></div><div><dt>Location</dt><dd class="file-path">${escape(file.relativePath)}</dd></div></dl>
   ${photoTags(photo)}${file.timestampSource === 'modified' ? '<p class="metadata-warning">Capture time unavailable. Grouped using the file’s modified time.</p>' : ''}${file.warning ? `<p class="metadata-warning">${escape(file.warning)}</p>` : ''}<div class="details-tip">${icon('Info', 16)}<p>Double-click a thumbnail to open the viewer. Use <kbd>←</kbd> / <kbd>→</kbd> to browse. Mark your selection with <kbd>A</kbd> to accept, <kbd>D</kbd> to reject, or <kbd>S</kbd> to clear status.</p></div></aside>`;
 }
@@ -191,7 +226,7 @@ function viewer() {
   const index = visible.findIndex(p => p.id === photo.id);
   const eventPhotoIds = new Set(events.find(event => event.photos.some(item => item.id === photo.id))?.photos.map(item => item.id) ?? [photo.id]);
   const stripPhotos = visible.filter(item => eventPhotoIds.has(item.id));
-  return `<div class="viewer"><div class="viewer-toolbar"><div class="viewer-format">${file.extension.toUpperCase()}${reviewStatus(photo) ? `<span class="detail-review ${reviewStatus(photo)}">${reviewStatus(photo) === 'accepted' ? 'Accepted' : 'Rejected'}</span>` : ''}${file.kind === 'raw' ? '<span>Embedded preview</span>' : ''}</div><div class="viewer-tools">${photo.raw && photo.primary.kind === 'jpeg' ? `<button class="button compact" data-action="toggle-raw">${state.raw ? 'View JPEG' : 'View RAW'}<kbd>T</kbd></button>` : ''}${file.kind !== 'video' ? btn(state.zoom ? 'ZoomOut' : 'ZoomIn', state.zoom ? 'Fit to window' : 'Zoom photo', 'zoom', state.zoom) : ''}</div></div><div class="viewer-stage ${state.zoom ? 'zoomed' : ''}"><button class="viewer-nav previous" data-action="previous" aria-label="Previous capture" ${index <= 0 ? 'disabled' : ''}>${icon('ChevronLeft', 25)}</button><div class="full-media ${reviewStatus(photo) === 'rejected' ? 'is-rejected' : ''}">${mediaMarkup(file, false)}</div><button class="viewer-nav next" data-action="next" aria-label="Next capture" ${index >= visible.length - 1 ? 'disabled' : ''}>${icon('ChevronRight', 25)}</button></div><div class="viewer-bottom"><span>${icon(file.kind === 'video' ? 'Film' : 'Camera', 15)}${escape(file.camera ?? file.extension.toUpperCase())}</span><span>${file.kind === 'video' ? 'Space to play / pause • ⌘ / Alt + ← / → to seek 5 seconds' : `${file.iso ? `ISO ${escape(file.iso)}` : ''}${file.aperture ? `　ƒ/${escape(file.aperture)}` : ''}${file.shutter ? `　${escape(file.shutter)}` : ''}`}</span><span>${time(file.capturedAt)}</span></div><div class="filmstrip" role="group" aria-label="Photos in this event">${stripPhotos.map(p => `<button class="filmstrip-item ${p.id === photo.id ? 'selected' : ''} ${reviewStatus(p) === 'rejected' ? 'is-rejected' : ''}" data-photo="${escape(p.id)}" aria-label="Open ${escape(p.primary.name)}${reviewStatus(p) ? `, ${reviewStatus(p)}` : ''}" aria-pressed="${p.id === photo.id}">${mediaMarkup(currentFile(p), true)}${reviewBadge(p)}</button>`).join('')}</div></div>`;
+  return `<div class="viewer"><div class="viewer-stage ${state.zoom ? 'zoomed' : ''}"><button class="viewer-nav previous" data-action="previous" aria-label="Previous capture" ${index <= 0 ? 'disabled' : ''}>${icon('ChevronLeft', 25)}</button><div class="full-media ${reviewStatus(photo) === 'rejected' ? 'is-rejected' : ''}">${mediaMarkup(file)}</div><button class="viewer-nav next" data-action="next" aria-label="Next capture" ${index >= visible.length - 1 ? 'disabled' : ''}>${icon('ChevronRight', 25)}</button></div><div class="filmstrip" role="group" aria-label="Photos in this event">${stripPhotos.map(p => `<button class="filmstrip-item ${p.id === photo.id ? 'selected' : ''} ${reviewStatus(p) === 'rejected' ? 'is-rejected' : ''}" data-photo="${escape(p.id)}" aria-label="Open ${escape(p.primary.name)}${reviewStatus(p) ? `, ${reviewStatus(p)}` : ''}" aria-pressed="${p.id === photo.id}">${mediaMarkup(currentFile(p), p)}${reviewBadge(p)}</button>`).join('')}</div></div>`;
 }
 function help() {
   return `<div class="modal-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="shortcut-title" class="shortcuts-modal"><div class="modal-title"><h2 id="shortcut-title">Make yourself at home.</h2>${btn('X', 'Close keyboard shortcuts', 'help')}</div><p>A few keys for a smoother review.</p><dl class="shortcut-list">${[['Next capture', '<kbd>→</kbd>'], ['Previous capture', '<kbd>←</kbd>'], ['Open selected photo', '<kbd>Enter</kbd>'], ['Back to thumbnails', '<kbd>Esc</kbd>'], ['Switch JPEG / RAW', '<kbd>T</kbd>'], ['Play / pause video', '<kbd>Space</kbd>'], ['Seek video 5 seconds', '<kbd>⌘ / Alt</kbd><kbd>← / →</kbd>'], ['Accept selection', '<kbd>A</kbd>'], ['Reject selection', '<kbd>D</kbd>'], ['Clear review status', '<kbd>S</kbd>'], ['Select all visible captures', '<kbd>⌘ / Ctrl</kbd><kbd>A</kbd>'], ['Show / hide details', '<kbd>I</kbd>'], ['Keyboard shortcuts', '<kbd>?</kbd>']].map(([a, b]) => `<div><dt>${a}</dt><dd>${b}</dd></div>`).join('')}</dl></section></div>`;
@@ -202,18 +237,20 @@ function exportDialog() {
   const fileCount = photos.reduce((count, photo) => count + photo.files.length, 0);
   const result = state.exportResult;
   const toPhotos = state.exportTarget === 'photos';
-  const eventFolders = state.exportMode !== 'selection';
+  const eventFolders = state.exportMode !== 'selection' || state.exportSelectionByEvent;
   return `<div class="modal-backdrop export-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="export-title" class="export-modal"><div class="modal-title"><h2 id="export-title">Export originals</h2><button class="icon-button" data-action="close-export" aria-label="Close export" ${state.exportBusy || state.choosingLocation ? 'disabled' : ''}>${icon('X', 18)}</button></div><p>${toPhotos ? 'Import originals into event albums on this Mac, carrying labels as Photos keywords.' : eventFolders ? 'Copy originals into event folders, with metadata JSON beside them.' : 'Copy selected originals directly into the destination, with metadata JSON beside them.'}</p>
   <fieldset class="export-options" ${state.exportBusy || state.choosingLocation ? 'disabled' : ''}><legend>Captures to export</legend><label><input type="radio" name="export-mode" value="selection" ${state.exportMode === 'selection' ? 'checked' : ''}>Selected captures<span>${state.selectedIds.size}</span></label><label><input type="radio" name="export-mode" value="accepted" ${state.exportMode === 'accepted' ? 'checked' : ''}>Accepted captures<span>${acceptedPhotos().length}</span></label><label><input type="radio" name="export-mode" value="event" ${state.exportMode === 'event' ? 'checked' : ''}>Event<span>${events.length} ${events.length === 1 ? 'event' : 'events'}</span></label>${state.exportMode === 'event' ? `<label class="export-event-picker">Choose event<select name="export-event" aria-label="Event to export">${events.map(event => `<option value="${escape(event.id)}" ${event.id === state.exportEventId ? 'selected' : ''}>${event.start.slice(0, 10)} ${time(event.start)} – ${event.end.slice(0, 10) !== event.start.slice(0, 10) ? `${event.end.slice(0, 10)} ` : ''}${time(event.end)} · ${event.photos.length} captures</option>`).join('')}</select></label>` : ''}</fieldset>
   ${state.photosAvailable ? `<fieldset class="export-targets" ${state.exportBusy || state.choosingLocation ? 'disabled' : ''}><legend>Destination</legend><label><input type="radio" name="export-target" value="folder" ${!toPhotos ? 'checked' : ''}>Folder</label><label><input type="radio" name="export-target" value="photos" ${toPhotos ? 'checked' : ''}>Photos (macOS)</label></fieldset>` : ''}
+  ${!toPhotos && state.exportMode === 'selection' ? `<label class="export-layout"><input type="checkbox" name="export-selection-by-event" ${state.exportSelectionByEvent ? 'checked' : ''} ${state.exportBusy || state.choosingLocation ? 'disabled' : ''}>Group selected captures into event folders</label>` : ''}
   ${!toPhotos ? `<div class="export-location"><span>Destination</span><div><strong title="${escape(state.exportLocation)}">${escape(state.exportLocation || 'Loading location…')}</strong><button class="button compact" data-action="choose-export-location" ${state.exportBusy || state.choosingLocation ? 'disabled' : ''}>${state.choosingLocation ? 'Choosing…' : 'Choose folder'}</button></div><small>This location is remembered for your next export.</small></div>` : `<div class="photos-destination">${icon('Image', 22)}<div><strong>Photos</strong><span>Imports into the current Photos library. macOS may ask for permission to control Photos.</span></div></div>`}
-  <p class="export-note">${toPhotos ? 'JPEG + RAW pairs include both original files. Photos creates or reuses an album per event and merges labels into imported items’ keywords. Photos manages supported formats and duplicate checking; skipped duplicates cannot receive new labels and are reported. Keep the card connected until the import finishes.' : eventFolders ? 'JPEG + RAW pairs include both original files. Each event gets its own folder and photo-proofing-export.json, containing EXIF, labels, and review decisions. Accepted exports add a short folder summary when Ollama is enabled. Existing event folders are kept; repeated exports receive a numbered folder.' : 'JPEG + RAW pairs include both original files. Selected files and their EXIF, labels, and review decisions in JSON are saved directly in the destination. Existing files are kept; duplicate names receive a number.'}</p>
+  <p class="export-note">${toPhotos ? 'JPEG + RAW pairs include both original files. Photos creates or reuses an album per event and merges labels into imported items’ keywords. Photos manages supported formats and duplicate checking; skipped duplicates cannot receive new labels and are reported. Keep the card connected until the import finishes.' : eventFolders ? `JPEG + RAW pairs include both original files. Each event gets its own folder and photo-proofing-export.json, containing EXIF, labels, and review decisions. ${state.exportMode !== 'event' ? 'Ollama can provide a short event folder name. ' : ''} Existing event folders are kept; repeated exports receive a numbered folder.` : 'JPEG + RAW pairs include both original files. Selected files and their EXIF, labels, and review decisions in JSON are saved directly in the destination. Existing files are kept; duplicate names receive a number.'}</p>
   ${state.exportBusy ? `<div class="export-progress" role="status"><progress value="${state.exportCopied}" max="${state.exportTotal || 1}"></progress><span>${state.exportCopied} of ${state.exportTotal} files ${toPhotos ? 'processed by Photos' : 'copied'}</span><small>${escape(state.exportCurrent)}</small></div>` : ''}
   ${result ? `<div class="export-result ${result.failures.length ? 'is-error' : result.cancelled || result.warnings?.length ? 'is-warning' : 'is-success'}" role="status"><strong>${result.cancelled ? 'Export stopped.' : result.failures.length ? 'Export finished with errors.' : result.warnings?.length ? 'Export complete with warnings.' : result.target === 'photos' ? 'Photos import complete.' : 'Export complete.'}</strong><span>${result.target === 'photos' ? `${result.copied} of ${result.total} original files processed by Photos. ${result.importedItems ?? 0} ${result.importedItems === 1 ? 'item' : 'items'} imported; duplicates may be skipped.` : `${result.copied} of ${result.total} files copied to ${escape(result.destination)}.`}</span>${result.failures.length ? `<ul>${result.failures.slice(0, 5).map(f => `<li>${escape(f.name)}: ${escape(f.message)}</li>`).join('')}</ul>${result.failures.length > 5 ? `<span>And ${result.failures.length - 5} more failures.</span>` : ''}` : ''}${result.warnings?.length ? `<ul class="export-warnings">${result.warnings.map(warning => `<li>${escape(warning)}</li>`).join('')}</ul>` : ''}</div>` : ''}
   ${state.exportError ? `<p role="alert" class="export-error">${escape(state.exportError)}</p>` : ''}
   <div class="export-buttons">${state.exportBusy ? `<button class="button" data-action="cancel-export">Stop after current ${toPhotos ? 'batch' : 'file'}</button>` : `<span>${photos.length} ${photos.length === 1 ? 'capture' : 'captures'} / ${fileCount} ${fileCount === 1 ? 'file' : 'files'}</span><button class="button primary" data-action="start-export" ${!photos.length || (!toPhotos && !state.exportLocation) || state.choosingLocation ? 'disabled' : ''}>Export ${state.exportMode === 'accepted' ? 'accepted' : state.exportMode === 'event' ? 'event' : 'selection'}${toPhotos ? ' to Photos' : ''}</button>`}</div></section></div>`;
 }
 function refreshExportDialog() {
+  const previousLayout = (document.activeElement as HTMLInputElement | null)?.name === 'export-selection-by-event';
   const previousEvent = (document.activeElement as HTMLSelectElement | null)?.name === 'export-event';
   const previousAction = (document.activeElement as HTMLElement | null)?.dataset.action;
   const previousRadio = ['export-mode', 'export-target'].includes((document.activeElement as HTMLInputElement | null)?.name ?? '') ? (document.activeElement as HTMLInputElement).value : '';
@@ -221,12 +258,13 @@ function refreshExportDialog() {
   if (backdrop) backdrop.outerHTML = exportDialog();
   if (previousAction) root.querySelector<HTMLButtonElement>(`.export-modal [data-action="${previousAction}"]`)?.focus();
   else if (previousRadio) root.querySelector<HTMLInputElement>(`.export-modal input[value="${previousRadio}"]`)?.focus();
+  else if (previousLayout) root.querySelector<HTMLInputElement>('[name="export-selection-by-event"]')?.focus();
   else if (previousEvent) root.querySelector<HTMLSelectElement>('[name="export-event"]')?.focus();
 }
 async function openExport() {
   if (state.demo || state.loading || !window.desktop) return;
   state.exportEventId = state.eventId || events.find(event => event.photos.some(photo => state.selectedIds.has(photo.id)))?.id || events[0]?.id || '';
-  state.exportMode = state.selectedIds.size ? 'selection' : 'accepted'; state.exportTarget = 'folder'; state.exportResult = null; state.exportError = ''; state.exportOpen = true;
+  state.exportMode = state.selectedIds.size ? 'selection' : 'accepted'; state.exportTarget = 'folder'; state.exportSelectionByEvent = false; state.exportResult = null; state.exportError = ''; state.exportOpen = true;
   render(); root.querySelector<HTMLButtonElement>('.export-modal [data-action="close-export"]')?.focus();
   try { const [location, capabilities] = await Promise.all([window.desktop.getExportLocation(), window.desktop.getExportCapabilities()]); state.exportLocation = location; state.photosAvailable = capabilities.photos; }
   catch (error) { state.exportError = `Unable to load the export location. ${errorMessage(error)}`; }
@@ -244,7 +282,7 @@ async function startExport() {
   const ids = exportPhotos().flatMap(photo => photo.files.map(file => file.id));
   if (!ids.length) return;
   state.exportBusy = true; state.exportCopied = 0; state.exportTotal = ids.length; state.exportCurrent = ''; state.exportResult = null; state.exportError = ''; refreshExportDialog();
-  try { state.exportResult = state.exportTarget === 'photos' ? await window.desktop.exportToPhotos(ids) : await window.desktop.exportFiles(ids, state.exportMode); }
+  try { state.exportResult = state.exportTarget === 'photos' ? await window.desktop.exportToPhotos(ids) : await window.desktop.exportFiles(ids, state.exportMode === 'selection' && state.exportSelectionByEvent ? 'selection-by-event' : state.exportMode); }
   catch (error) { state.exportError = `Export could not finish. ${errorMessage(error)}`; }
   finally { state.exportBusy = false; state.exportCurrent = ''; render(); }
 }
@@ -255,10 +293,13 @@ function progressRow(id: string, label: string, completed: number, total: number
   return `<div class="activity-row activity-${outcome}"><label for="${id}">${label}</label><progress id="${id}" aria-label="${label} progress" aria-valuetext="${escape(detail)}" ${indeterminate ? '' : `value="${completed}"`} max="${Math.max(1, total)}"></progress><span>${escape(detail)}</span></div>`;
 }
 function labellingProgress(id = 'labelling-progress') {
-  if ((!state.tagging && !state.tagTotal && !state.tagSummary) || (!state.tagTotal && state.summaryTotal)) return '';
-  const phase = state.tagging ? state.tagStopping ? state.summaryActive ? 'finishing current event' : 'finishing current photo' : 'in background' : state.tagConfirmation === 'start' || state.tagConfirmation === 'enable' ? 'awaiting confirmation' : state.tagSummary;
-  const outcome = state.tagStopping || state.tagSummary === 'stopped' ? 'warning' : state.tagSummary === 'complete' ? 'success' : /failed|could not finish/.test(state.tagSummary) ? 'error' : 'active';
-  return progressRow(id, 'Labelling', state.tagCompleted, state.tagTotal, `${state.tagCompleted} of ${state.tagTotal} photos${phase ? ` · ${phase}` : ''}`, false, outcome);
+  if (!state.tagTotal) return '';
+  const detail = `${state.tagCompleted} of ${state.tagTotal} photos`;
+  if (!state.tagging && state.tagSummary === 'stopped') return `<p role="status">${detail} · stopped</p>`;
+  const awaitingConfirmation = state.tagConfirmation === 'start' || state.tagConfirmation === 'enable';
+  if ((!state.tagging && !awaitingConfirmation) || state.tagSummary === 'complete' || state.tagCompleted >= state.tagTotal) return '';
+  const phase = state.tagStopping ? 'finishing current photo' : awaitingConfirmation ? 'awaiting confirmation' : 'in background';
+  return progressRow(id, 'Labelling', state.tagCompleted, state.tagTotal, `${detail} · ${phase}`, false, state.tagStopping ? 'warning' : 'active');
 }
 function reviewProgress() {
   if (!allPhotos.length) return '';
@@ -297,11 +338,11 @@ function showReviewPreview(event: PointerEvent, track: HTMLElement) {
   if (reviewPreviewPhotoId !== photo.id) {
     reviewPreviewPhotoId = photo.id;
     const file = currentFile(photo);
-    preview.innerHTML = `<div class="review-hover-image ${reviewStatus(photo) === 'rejected' ? 'is-rejected' : ''}">${mediaMarkup(file, true)}${reviewBadge(photo)}</div><strong>${escape(file.name)}</strong><span>${index + 1} of ${visible.length} · ${time(file.capturedAt)}</span>`;
+    preview.innerHTML = `<div class="review-hover-image ${reviewStatus(photo) === 'rejected' ? 'is-rejected' : ''}">${mediaMarkup(file, photo)}${reviewBadge(photo)}</div><strong>${escape(file.name)}</strong><span>${index + 1} of ${visible.length} · ${time(file.capturedAt)}</span>`;
     bindMediaErrors();
   }
   preview.style.left = `${Math.max(8, Math.min(innerWidth - 196, event.clientX - 94))}px`;
-  preview.style.bottom = `${innerHeight - track.getBoundingClientRect().top + 12}px`;
+  preview.style.top = `${track.getBoundingClientRect().bottom + 10}px`;
 }
 function focusReviewPhoto(index: number, keepBarFocus = false) {
   const photo = visible[Math.max(0, Math.min(visible.length - 1, index))];
@@ -313,7 +354,9 @@ function focusReviewPhoto(index: number, keepBarFocus = false) {
   if (!keepBarFocus) target?.scrollIntoView({ block: 'center', inline: 'nearest' });
 }
 function eventSummaryProgress(id = 'event-summaries-progress') {
-  return state.summaryTotal ? progressRow(id, 'Events', state.summaryCompleted, state.summaryTotal, `${state.summaryCompleted} of ${state.summaryTotal} event summaries${state.summaryActive ? ' · in background' : state.summaryCancelled ? ' · stopped' : eventSummaryErrors.size ? ' · errors' : ' · complete'}`, false, state.summaryActive ? 'active' : state.summaryCancelled ? 'warning' : eventSummaryErrors.size ? 'error' : 'success') : '';
+  if (!state.summaryActive || !state.summaryTotal) return '';
+  const phase = state.tagStopping ? 'finishing current event' : 'in background';
+  return progressRow(id, 'Events', state.summaryCompleted, state.summaryTotal, `${state.summaryCompleted} of ${state.summaryTotal} event summaries · ${phase}`, false, state.tagStopping ? 'warning' : 'active');
 }
 function activityProgress() {
   const indexing = !state.demo && state.source && (state.loading || state.scanned < state.total)
@@ -394,7 +437,7 @@ function requestOllamaChange(enabled: boolean) {
   else void applyOllamaChange(true);
 }
 
-interface SoftwareCredit { name: string; version: string; license: string; notices: { name: string; text: string }[] }
+interface SoftwareCredit { name: string; version: string; license: string }
 interface AboutCredits { version: string; appLicense: string; software: SoftwareCredit[] }
 let aboutCredits: AboutCredits | undefined;
 let aboutError = '';
@@ -402,10 +445,13 @@ let aboutReturnFocus: HTMLElement | null = null;
 function aboutContent() {
   if (aboutError) return `<p role="alert" class="settings-error">${escape(aboutError)}</p><button class="button" data-action="about">Retry loading credits</button>`;
   if (!aboutCredits) return '<p role="status">Loading software licenses…</p>';
-  return `<p class="about-version">Version ${escape(aboutCredits.version)}</p><p>© 2026 Juti Noppornpitak</p><details class="license-notice"><summary>Photo Proofer · Apache License 2.0</summary><pre>${escape(aboutCredits.appLicense)}</pre></details>
-  <h3>Open-source software</h3><p>Thank you to the projects that make Photo Proofer possible. Software versions and licenses below reflect this build.</p>
-  <div class="software-credits">${aboutCredits.software.map(software => `<details class="software-credit"><summary><span><strong>${escape(software.name)}</strong><small>${escape(software.version)}</small></span><span class="software-license">${escape(software.license)}</span></summary>${software.notices.length ? software.notices.map(notice => `<section><h4>${escape(notice.name)}</h4><pre>${escape(notice.text)}</pre></section>`).join('') : `<p>License: ${escape(software.license)}. Bundled native library notices are included with the sharp-libvips entry.</p>`}</details>`).join('')}</div>
-  <details class="chromium-credits"><summary>Chromium, Node.js and Electron third-party notices</summary><p>Additional runtime components and their full license notices are included below.</p><iframe title="Chromium and runtime license notices" sandbox src="${import.meta.env.BASE_URL}licenses/chromium.html" loading="lazy"></iframe></details>`;
+  const dependencies = aboutCredits.software.map(software => `
+    <li class="software-credit"><span><strong>${escape(software.name)}</strong> <small>${escape(software.version)}</small></span><span class="software-license">${escape(software.license)}</span></li>`).join('');
+  return `<p class="about-version">Version ${escape(aboutCredits.version)}</p><p>© 2026 Juti Noppornpitak</p>
+    <details class="license-notice"><summary>Apache License 2.0</summary>
+      <pre tabindex="0" aria-label="Photo Proofer license text">${escape(aboutCredits.appLicense)}</pre>
+      <h3>Dependency licenses</h3><ul class="software-credits">${dependencies}</ul>
+    </details>`;
 }
 function aboutDialog() {
   return `<div class="modal-backdrop about-backdrop"><section class="about-modal" role="dialog" aria-modal="true" aria-labelledby="about-title"><div class="modal-title"><h2 id="about-title">About Photo Proofer</h2>${btn('X', 'Close About', 'close-about')}</div><div class="about-content">${aboutContent()}</div></section></div>`;
@@ -598,7 +644,7 @@ function render() {
   const labelPopup = { open: state.labelOpen, active: state.labelActive };
   const searchCursor = focusedSearch ? (document.activeElement as HTMLInputElement).selectionStart : null;
   compute();
-  root.innerHTML = `<div class="app-shell ${state.info ? '' : 'no-details'}">${sidebar()}<main>${toolbar()}<div class="cache-notices">${cacheNotices()}</div><div class="error-notices">${errorNotices()}</div><div class="selection-toolbar">${selectionToolbar()}</div><div class="workspace"><div class="gallery-scroll ${state.full ? 'viewer-container' : ''}">${state.full ? viewer() : gallery()}</div>${state.info ? details() : ''}</div><div class="activity-panel" aria-label="Background activity">${activityProgress()}</div><footer><span class="library-status" role="status">${state.source ? `${visible.length} captures${state.skipped ? ` • ${state.skipped} unreadable files or folders` : ''}` : 'Ready when you are'}</span><span>${state.demo ? 'Sample photos • illustrative metadata' : state.loading ? 'You can start reviewing while we read.' : 'Originals stay untouched'}<span class="footer-divider"></span>${state.full ? '<kbd>Esc</kbd> Thumbnails' : 'Double-click to open'}<span class="footer-divider"></span><button data-action="help"><kbd>?</kbd> Shortcuts</button></span></footer></main></div>${state.help ? help() : ''}${state.exportOpen ? exportDialog() : ''}${state.settingsOpen ? settingsDialog() : ''}${state.about ? aboutDialog() : ''}${tagConfirmationDialog()}`;
+  root.innerHTML = `<div class="app-shell">${sidebar()}<main>${workspaceHeader()}<div class="cache-notices">${cacheNotices()}</div><div class="error-notices">${errorNotices()}</div><div class="workspace"><div class="gallery-scroll ${state.full ? 'viewer-container' : ''}">${state.full ? viewer() : gallery()}</div>${details()}</div></main></div>${state.help ? help() : ''}${state.exportOpen ? exportDialog() : ''}${state.settingsOpen ? settingsDialog() : ''}${state.about ? aboutDialog() : ''}${tagConfirmationDialog()}`;
   if (previousAbout && state.about) root.querySelector('.about-backdrop')?.replaceWith(previousAbout);
   const nextMedia = root.querySelector<HTMLVideoElement | HTMLImageElement>('.full-media .media-image');
   if (previousMedia && nextMedia && previousMedia.getAttribute('src') === nextMedia.getAttribute('src')) nextMedia.replaceWith(previousMedia);
@@ -642,11 +688,12 @@ async function loadSource(source: Source, reindex = false) {
   await preferencesReady;
   if (state.exportBusy) { state.error = 'Finish or cancel the export before opening another source.'; render(); return; }
   reviewEdits.clear(); state.cacheWarnings = [];
+  thumbnailRevisions.clear();
   tagEpoch++; resetEventSummaries(); tags.clear(); tagErrors.clear(); state.tagJobId = ''; state.tagging = false; state.tagSummary = ''; state.tagStopping = false; state.tagTotal = 0; state.tagCompleted = 0; state.tagDeferred = false;
   if (reindex) state.tagApprovedEpoch = tagEpoch;
   clearSelection();
   state.files = []; state.source = source; state.demo = false; state.selectedId = ''; state.eventId = ''; state.full = false;
-  state.raw = false; state.loading = true; state.error = ''; state.scanned = 0; state.total = 0; state.skipped = 0; state.search = ''; state.filter = 'all'; state.reviewFilter = 'all'; state.labelFilters = []; state.labelOpen = false; state.labelActive = -1;
+  state.raw = false; state.loading = true; state.error = ''; state.scanned = 0; state.total = 0; state.search = ''; state.filter = 'all'; state.reviewFilter = 'all'; state.labelFilters = []; state.labelOpen = false; state.labelActive = -1;
   render();
   try { if (reindex) await window.desktop!.reindex(source); else await window.desktop!.scan(source); } catch (error) { state.loading = false; state.error = `Unable to read this source. ${errorMessage(error)}`; render(); }
 }
@@ -710,26 +757,38 @@ function reviewBadge(photo: Photo) {
   const status = reviewStatus(photo);
   return status ? `<span class="review-badge ${status}" title="${status === 'accepted' ? 'Accepted' : 'Rejected'}" aria-label="${status === 'accepted' ? 'Accepted' : 'Rejected'}">${icon(status === 'accepted' ? 'Check' : 'X', 12)}</span>` : '';
 }
-function selectionToolbar() {
-  if (!allPhotos.length) return '';
+function selectionControls() {
   const count = state.selectedIds.size;
-  return `<span class="selection-summary">${count ? `${count} selected` : 'Click to select. Shift for a range. Cmd / Ctrl to add.'}</span><div class="selection-actions"><button data-action="accept" class="review-action accept" ${!count ? 'disabled' : ''}>${icon('Check', 14)}Accept<kbd>A</kbd></button><button data-action="reject" class="review-action reject" ${!count ? 'disabled' : ''}>${icon('X', 14)}Reject<kbd>D</kbd></button>${count ? '<button data-action="clear-review" class="review-action" aria-label="Clear status">Clear status <kbd>S</kbd></button><button data-action="clear-selection" class="review-action" aria-label="Deselect all captures">Deselect</button>' : ''}<span class="accepted-count">${acceptedPhotos().length} accepted</span></div>`;
+  if (!count) return '';
+  const canStitch = !state.full && !state.demo && !state.loading && count >= 2 && count <= 12 && selectedPhotos().every(photo => photo.primary.kind !== 'video');
+  return `${!state.full && count > 1 ? `<span class="selection-summary">${count} selected</span>` : ''}<div class="selection-actions"><button data-action="accept" class="review-action accept">${icon('Check', 14)}Accept<kbd>A</kbd></button><button data-action="reject" class="review-action reject">${icon('X', 14)}Reject<kbd>D</kbd></button><button data-action="clear-review" class="review-action" aria-label="Clear status">Clear status <kbd>S</kbd></button><button data-action="clear-selection" class="review-action" aria-label="Deselect all captures">Deselect</button>${canStitch ? '<button data-action="panorama" class="review-action">Create panorama</button>' : ''}</div>`;
 }
-function updateSelectionUI() {
+function updateSelectionUI(updateLayout = true) {
   root.querySelectorAll<HTMLElement>('.photo-card').forEach(card => {
     const isSelected = state.selectedIds.has(card.dataset.photo!);
     card.classList.toggle('is-selected', isSelected); card.setAttribute('aria-pressed', String(isSelected));
     const photo = photoById.get(card.dataset.photo!);
     card.classList.toggle('is-rejected', Boolean(photo && reviewStatus(photo) === 'rejected'));
     const image = card.querySelector<HTMLImageElement>('.thumbnail img.media-image');
-    if (photo && image) { const file = currentFile(photo); if (image.getAttribute('src') !== url(file, true)) { image.src = url(file, true); image.alt = file.name; } }
+    if (photo && image) { const file = currentFile(photo); const src = url(file, photo); if (image.getAttribute('src') !== src) { image.src = src; image.alt = file.name; } }
     const indicator = card.querySelector('.review-indicator');
     if (photo && indicator) indicator.innerHTML = reviewBadge(photo);
   });
-  const toolbar = root.querySelector('.selection-toolbar');
-  if (toolbar) toolbar.innerHTML = selectionToolbar();
-  const panel = root.querySelector('.details');
-  if (panel) { const scroll = panel.scrollTop; panel.outerHTML = details(); const replacement = root.querySelector('.details'); if (replacement) replacement.scrollTop = scroll; }
+  if (updateLayout) {
+    const controls = root.querySelector('.selection-controls');
+    if (controls) controls.innerHTML = selectionControls();
+    const info = root.querySelector('.info-control');
+    if (info) info.innerHTML = infoButton();
+    const panel = root.querySelector('.details');
+    if (panel) {
+      const scroll = panel.scrollTop;
+      panel.outerHTML = details();
+      const replacement = root.querySelector('.details');
+      if (replacement) replacement.scrollTop = scroll;
+    } else {
+      root.querySelector('.workspace')?.insertAdjacentHTML('beforeend', details());
+    }
+  }
   bindMediaErrors();
   updateActivityUI();
 }
@@ -758,11 +817,65 @@ function addCacheWarning(message: string) {
   const notices = root.querySelector('.cache-notices');
   if (notices) notices.innerHTML = cacheNotices();
 }
+async function showSimilarPhotos() {
+  const api = window.desktop;
+  if (!api || state.demo || state.loading || document.querySelector('.similar-dialog')) return;
+  const dialog = document.createElement('dialog');
+  dialog.className = 'similar-dialog';
+  dialog.setAttribute('aria-labelledby', 'similar-title');
+  dialog.innerHTML = '<header><h2 id="similar-title">Similar photos</h2><button type="button" class="button">Close</button></header><div class="similar-results" aria-live="polite"><p>Comparing nearby photos within each event…</p></div>';
+  const opener = document.activeElement as HTMLElement | null;
+  dialog.querySelector('button')!.onclick = () => dialog.close();
+  dialog.addEventListener('close', () => { dialog.remove(); opener?.focus(); });
+  const results = dialog.querySelector<HTMLElement>('.similar-results')!;
+  document.body.append(dialog);
+  dialog.showModal();
+  try {
+    const { groups, failures } = await api.findSimilar();
+    if (!dialog.isConnected) return;
+    const photosByFile = new Map(allPhotos.map(photo => [photo.primary.id, photo]));
+    const matches = groups.map(ids => ids.flatMap(id => photosByFile.get(id) ?? []));
+    results.innerHTML = matches.length ? matches.map((group, index) => `<section class="similar-group"><h3>${group.length} similar captures</h3><div>${group.map(photo => `<figure><img src="${escape(url(photo.primary, photo))}" alt="" loading="lazy"><figcaption>${escape(photo.primary.name)}</figcaption></figure>`).join('')}</div><button type="button" class="button compact" data-similar-group="${index}">Select group for review</button></section>`).join('') : '<p>No near-duplicates found.</p>';
+    if (failures.length) results.insertAdjacentHTML('beforeend', `<details class="similar-failures"><summary>${failures.length} photos could not be compared</summary><ul>${failures.map(item => `<li>${escape(item.name)} · ${escape(item.message)}</li>`).join('')}</ul></details>`);
+    results.onclick = event => {
+      const button = (event.target as HTMLElement).closest<HTMLElement>('[data-similar-group]');
+      if (!button) return;
+      const group = matches[Number(button.dataset.similarGroup)];
+      const first = group[0];
+      if (!first) return;
+      state.full = false;
+      state.filter = state.reviewFilter = 'all';
+      state.search = '';
+      state.labelFilters = [];
+      state.eventId = events.find(event => event.photos.some(photo => photo.id === first.id))?.id ?? '';
+      setSingle(first.id);
+      state.selectedIds = new Set(group.map(photo => photo.id));
+      dialog.close();
+      render();
+      root.querySelector<HTMLElement>('.photo-card.is-selected')?.scrollIntoView({ block: 'nearest' });
+    };
+  } catch (error) {
+    results.textContent = errorMessage(error);
+  }
+}
+
 const actions: Record<string, () => void | Promise<void>> = {
+  similar: showSimilarPhotos,
+  panorama: () => openPanorama(selectedPhotos()),
+  'edit-photo': () => {
+    const photo = selected();
+    const file = photo && currentFile(photo);
+    if (photo && file && canEdit(file)) return openEditor(file, () => {
+      if (!state.files.some(item => item.id === file.id)) return;
+      thumbnailRevisions.set(photo.id, (thumbnailRevisions.get(photo.id) ?? 0) + 1);
+      render();
+      root.querySelector<HTMLButtonElement>('[data-action="edit-photo"]')?.focus({ preventScroll: true });
+    });
+  },
   open: openFolder, bookmark: () => toggleBookmark(), reindex: reindexSource, 'apply-event-gap': applyEventGap,
   all: () => { clearSelection(); state.eventId = ''; state.full = false; render(); },
   back: () => { state.full = false; state.zoom = false; render(); },
-  info: () => { state.info = !state.info; render(); },
+  info: () => { if (selected()) { state.info = !state.info; render(); root.querySelector<HTMLButtonElement>('.info-control button')?.focus({ preventScroll: true }); } },
   help: () => { state.help = !state.help; render(); },
   about: openAbout, 'close-about': closeAbout,
   settings: openSettings,
@@ -792,15 +905,27 @@ const actions: Record<string, () => void | Promise<void>> = {
 const marquee = installMarquee(root, {
   enabled: () => !state.full && !state.help && !state.exportOpen && !state.settingsOpen && !state.tagConfirmation,
   selection: () => state.selectedIds,
-  update: ids => {
-    if (ids.size === state.selectedIds.size && [...ids].every(id => state.selectedIds.has(id))) return;
-    state.selectedIds = ids; state.selectedId = [...ids].at(-1) ?? ''; state.anchorId = [...ids][0] ?? ''; state.raw = false;
-    updateSelectionUI();
+  update: (ids, finished) => {
+    if (ids.size !== state.selectedIds.size || [...ids].some(id => !state.selectedIds.has(id))) {
+      state.selectedIds = ids; state.selectedId = [...ids].at(-1) ?? ''; state.anchorId = [...ids][0] ?? ''; state.raw = false;
+      updateSelectionUI(finished);
+    } else if (finished) updateSelectionUI();
   },
 });
+let previousGalleryClick: { id: string; x: number; y: number; card: HTMLElement } | undefined;
 root.addEventListener('click', event => {
+  const previous = previousGalleryClick;
+  previousGalleryClick = undefined;
   if (marquee.consumeClick()) { event.preventDefault(); return; }
   const target = event.target as HTMLElement;
+  const plainClick = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
+  // The first click can open the details panel and move the card under the pointer.
+  if (!state.full && plainClick && event.detail === 2 && previous?.card.isConnected
+    && Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= 5) {
+    event.preventDefault();
+    selectPhoto(previous.id, true);
+    return;
+  }
   const bookmark = target.closest<HTMLElement>('[data-bookmark]');
   if (bookmark) { void openBookmark(Number(bookmark.dataset.bookmark)); return; }
   const removeBookmark = target.closest<HTMLElement>('[data-remove-bookmark]');
@@ -814,7 +939,13 @@ root.addEventListener('click', event => {
   const action = target.closest<HTMLElement>('[data-action]')?.dataset.action;
   if (action) { void actions[action]?.(); return; }
   const photo = target.closest<HTMLElement>('[data-photo]');
-  if (photo) { selectPhoto(photo.dataset.photo!, state.full, event); return; }
+  if (photo) {
+    if (!state.full && plainClick && event.detail === 1) {
+      previousGalleryClick = { id: photo.dataset.photo!, x: event.clientX, y: event.clientY, card: photo };
+    }
+    selectPhoto(photo.dataset.photo!, state.full, event);
+    return;
+  }
   const eventButton = target.closest<HTMLElement>('[data-event]');
   if (eventButton) { clearSelection(); state.eventId = eventButton.dataset.event!; state.full = false; render(); return; }
   const filter = target.closest<HTMLElement>('[data-filter]');
@@ -827,10 +958,6 @@ root.addEventListener('click', event => {
 root.addEventListener('contextmenu', event => {
   const photo = (event.target as HTMLElement).closest<HTMLElement>('.photo-card');
   if (photo && event.ctrlKey && !state.full) { event.preventDefault(); selectPhoto(photo.dataset.photo!, false, event); }
-});
-root.addEventListener('dblclick', event => {
-  const photo = (event.target as HTMLElement).closest<HTMLElement>('.photo-card');
-  if (photo && !event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); selectPhoto(photo.dataset.photo!, true); }
 });
 root.addEventListener('input', event => {
   const input = event.target as HTMLInputElement;
@@ -851,10 +978,11 @@ root.addEventListener('input', event => {
   }
 });
 document.addEventListener('keydown', event => {
+  if (document.querySelector('dialog[open]')) return;
   if (state.about && !state.tagConfirmation) {
     if (event.key === 'Escape') { event.preventDefault(); closeAbout(); }
     if (event.key === 'Tab') {
-      const controls = [...root.querySelectorAll<HTMLElement>('.about-modal button, .about-modal summary, .about-modal iframe')];
+      const controls = [...root.querySelectorAll<HTMLElement>('.about-modal button, .about-modal summary, .about-modal details[open] pre')];
       const first = controls[0], last = controls.at(-1);
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -943,7 +1071,9 @@ document.addEventListener('keydown', event => {
   if (event.key.toLowerCase() === 'i') { event.preventDefault(); void actions.info(); }
   if (event.key === '?') { event.preventDefault(); void actions.help(); }
   if (event.key === 'Escape' && state.full) void actions.back();
-  if (event.key === 'Enter' && selected()) { event.preventDefault(); setSingle(state.selectedId); state.full = true; render(); }
+  if (event.key === 'Enter' && selected() && !(event.target as HTMLElement).closest('button:not(.photo-card)')) {
+    event.preventDefault(); setSingle(state.selectedId); state.full = true; render();
+  }
 });
 root.addEventListener('change', event => {
   const input = event.target as HTMLInputElement;
@@ -954,6 +1084,11 @@ root.addEventListener('change', event => {
   if (input.matches('[data-ollama-enabled]')) requestOllamaChange(input.checked);
   if (input.name === 'export-target' && !state.exportBusy && (input.value !== 'photos' || state.photosAvailable)) { state.exportTarget = input.value as 'folder' | 'photos'; state.exportResult = null; state.exportError = ''; refreshExportDialog(); }
   if (input.name === 'export-event' && !state.exportBusy) { state.exportEventId = input.value; state.exportResult = null; state.exportError = ''; refreshExportDialog(); }
+  if (input.name === 'export-selection-by-event' && !state.exportBusy) {
+    state.exportSelectionByEvent = input.checked;
+    state.exportResult = null;
+    refreshExportDialog();
+  }
   if (input.name === 'export-mode' && !state.exportBusy) { state.exportMode = input.value as 'selection' | 'accepted' | 'event'; state.exportResult = null; refreshExportDialog(); }
 });
 window.desktop?.onTagProgress(progress => {
@@ -981,7 +1116,7 @@ function scheduleScanRender() {
 window.desktop?.onProgress(progress => {
   if (state.demo || state.source?.path !== progress.source.path) return;
   state.files.push(...progress.files); state.scanned = progress.scanned; state.total = progress.total;
-  state.loading = !progress.done; state.skipped = progress.skipped;
+  state.loading = !progress.done;
   if (progress.done) { clearTimeout(progressRender); progressRender = undefined; scheduleScanRender(); void loadTags(); }
   else if (!progressRender) progressRender = setTimeout(scheduleScanRender, 180);
 });
@@ -1030,7 +1165,7 @@ window.desktop?.onEventSummary(update => {
   }
   if (update.completed !== undefined) {
     state.summaryCompleted = update.completed; state.summaryTotal = update.total ?? 0;
-    state.summaryActive = !update.done; state.summaryCancelled = Boolean(update.cancelled);
+    state.summaryActive = !update.done;
   }
   updateEventSummaryUI(); refreshSettings();
 });

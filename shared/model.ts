@@ -1,3 +1,4 @@
+import type { EditVersion, PhotoEdits, PhotoLut, VersionExportOptions } from './edits';
 import type { ReviewStatus } from './selection';
 export type ThemePreference = 'system' | 'light' | 'dark';
 export type MediaKind = 'jpeg' | 'raw' | 'image' | 'video';
@@ -41,7 +42,15 @@ export interface Source { name: string; path: string }
 export interface ScanProgress { scanned: number; total: number; files: MediaFile[]; done: boolean; source: Source; skipped: number }
 export interface SessionWarning { sourcePath: string; message: string }
 export interface EventSummaryUpdate { sourcePath?: string; id?: string; summary?: string; error?: string; completed?: number; total?: number; done?: boolean; cancelled?: boolean }
+export interface SimilarityResult { groups: string[][]; failures: { name: string; message: string }[] }
 export interface DesktopAPI {
+  exportPanorama(ids: string[]): Promise<string>;
+  findSimilar(): Promise<SimilarityResult>;
+  getEditVersions(id: string): Promise<EditVersion[]>;
+  chooseEditLut(id: string): Promise<PhotoLut | null>;
+  previewEdits(id: string, edits: PhotoEdits): Promise<string>;
+  saveEditVersion(id: string, edits: PhotoEdits, version?: number): Promise<EditVersion[]>;
+  exportEditVersions(id: string, versions: number[], options: VersionExportOptions): Promise<ExportResult>;
   getLibrarySettings(): Promise<LibrarySettings>;
   setEventGap(minutes: number): Promise<number>;
   toggleBookmark(folder: string): Promise<Source[]>;
@@ -69,7 +78,7 @@ export interface DesktopAPI {
   exportToPhotos(ids: string[]): Promise<ExportResult>;
   getExportLocation(): Promise<string>;
   chooseExportLocation(): Promise<string | null>;
-  exportFiles(ids: string[], mode?: 'selection' | 'accepted' | 'event'): Promise<ExportResult>;
+  exportFiles(ids: string[], mode?: 'selection' | 'selection-by-event' | 'accepted' | 'event'): Promise<ExportResult>;
   cancelExport(): Promise<void>;
   onExportProgress(callback: (progress: ExportProgress) => void): () => void;
   onProgress(callback: (progress: ScanProgress) => void): () => void;

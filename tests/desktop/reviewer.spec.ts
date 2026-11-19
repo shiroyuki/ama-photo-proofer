@@ -4,7 +4,7 @@ import { mkdtemp, rm, readFile, writeFile, readdir, copyFile, rename, realpath }
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { ExifTool } from 'exiftool-vendored';
-import { previewDng } from './fixtures';
+import { previewDng, sensorDng } from './fixtures';
 
 let desktop: ElectronApplication;
 let page: Page;
@@ -64,12 +64,26 @@ test('sample collection: thumbnail selection, viewer, navigation, filters and he
   await expect(page.locator('.event-date-group>h3')).toHaveText('2026-11-12');
   await expect(page.locator('.event-link strong')).toHaveText(['06:12 – 06:41', '09:04 – 09:36', '17:10 – 17:46']);
   await expect(page.locator('.capture-date')).toHaveCount(1);
+  await expect(page.locator('.titlebar, footer, .details')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open folder', exact: true })).toHaveCount(0);
+  const info = page.getByRole('button', { name: 'Toggle photo details' });
+  await expect(info).toHaveCount(0);
   await expect(page.locator('.photo-card img').first()).toHaveJSProperty('naturalWidth', 1000);
   await page.locator('.photo-card').first().click();
   await expect(page.locator('.detail-name h3')).toHaveText('DSC_2041.JPG');
   await expect(page.locator('.metadata')).toContainText('Sony α7 IV');
+  await expect(info).toHaveAttribute('aria-pressed', 'true');
+  expect(await info.evaluate(button => innerWidth - button.getBoundingClientRect().right)).toBeLessThanOrEqual(12);
+  await info.press('Enter');
+  await expect(page.locator('.details')).toHaveCount(0);
+  await page.keyboard.press('i');
+  await expect(page.locator('.details')).toBeVisible();
+  await page.locator('.photo-card').first().click();
+  await expect(page.locator('.details')).toHaveCount(0);
   await page.locator('.photo-card').first().dblclick();
   await expect(page.locator('.full-media img')).toBeVisible();
+  await expect(page.locator('.viewer-toolbar, .viewer-bottom, .selection-summary')).toHaveCount(0);
+  await expect(page.locator('.workspace-header')).not.toContainText('of 12 captures');
   await page.keyboard.press('ArrowRight');
   await expect(page.locator('h1')).toContainText('DSC_2042.JPG');
   await page.keyboard.press('ArrowLeft');
@@ -94,9 +108,9 @@ test('real folder: metadata, overnight events, media protocol and originals pres
   await desktop.evaluate(async ({ dialog }, fixture) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [fixture] });
   }, fixture);
-  await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   await expect(page.locator('.photo-card')).toHaveCount(3);
-  await expect(page.locator('footer')).toContainText('Originals stay untouched');
+  await expect(page.locator('#indexing-progress')).toHaveCount(0);
   await expect(page.locator('.event-section')).toHaveCount(2);
   await expect(page.locator('.event-section').first()).toContainText('Overnight');
   await page.locator('.photo-card').first().click();
@@ -114,7 +128,7 @@ test('real folder: metadata, overnight events, media protocol and originals pres
   await expect(page.locator('h1')).toContainText('TEST_1.DNG');
   await expect(page.locator('.full-media img')).not.toHaveJSProperty('naturalWidth', 0);
   await expect(page.locator('.media-error')).toHaveCount(0);
-  await expect(page.locator('.raw-note')).toContainText('embedded RAW preview');
+  await expect(page.locator('.raw-note')).toContainText('Choose Edit RAW to develop the sensor data');
   await page.keyboard.press('t');
   await expect(page.locator('h1')).toContainText('TEST_1.JPG');
   expect(hash(await readFile(path.join(fixture, 'TEST_1.JPG')))).toBe(originalHash);
@@ -142,7 +156,7 @@ test('video keyboard controls play, pause and seek five seconds', async () => {
     await writeFile(path.join(videoFolder, 'CLIP.webm'), Buffer.from(data));
     await writeFile(path.join(videoFolder, 'BEFORE.JPG'), await readFile(path.join(fixture, 'TEST_1.JPG')));
     await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, videoFolder);
-    await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
     await expect(page.locator('.photo-card')).toHaveCount(2);
     await page.locator('.photo-card').filter({ has: page.locator('video') }).dblclick();
     const video = page.locator('.full-media video');
@@ -219,7 +233,7 @@ test('ISO event labels and independently scrolling events keep bottom navigation
       await tool.write(file, { DateTimeOriginal: `2026:11:${String(index + 1).padStart(2, '0')} 09:00:00` }, ['-overwrite_original']);
     }
     await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, folder);
-    await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
     await expect(page.locator('.event-link')).toHaveCount(25);
     await expect(page.locator('.event-date-group>h3').first()).toHaveText('2026-11-01');
     await expect(page.locator('.event-link strong').first()).toHaveText('09:00 – 09:00');
@@ -244,7 +258,7 @@ test('exports selected pairs or accepted captures, remembers the folder and keep
   const destination = await mkdtemp(path.join(os.tmpdir(), 'ama-destination-'));
   try {
     await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-    await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
     await expect(page.locator('.photo-card')).toHaveCount(3);
     const cards = page.locator('.photo-card');
     await cards.nth(0).click(); await page.keyboard.press('a');
@@ -273,10 +287,21 @@ test('exports selected pairs or accepted captures, remembers the folder and keep
     expect(await readFile(path.join(destination, '2026-11-13_09-00-00', 'TEST_3.JPG'))).toEqual(await readFile(path.join(fixture, 'TEST_3.JPG')));
     await page.screenshot({ path: 'test-results/export.png' });
     await page.getByRole('button', { name: 'Close export', exact: true }).click();
+    await cards.nth(1).click();
+    await cards.nth(2).click({ modifiers: ['ControlOrMeta'] });
+    await page.getByRole('button', { name: 'Export', exact: true }).click();
+    await page.getByRole('checkbox', { name: 'Group selected captures into event folders' }).check();
+    await page.getByRole('button', { name: 'Export selection', exact: true }).click();
+    await expect(page.locator('.export-result')).toContainText('Export complete.');
+    const firstEvent = path.join(destination, '2026-11-12_23-45-00 (1)');
+    expect((await readdir(firstEvent)).sort()).toEqual(['TEST_2.JPG', 'photo-proofing-export.json']);
+    const secondEvent = path.join(destination, '2026-11-13_09-00-00 (1)');
+    expect((await readdir(secondEvent)).sort()).toEqual(['TEST_3.JPG', 'photo-proofing-export.json']);
+    await page.getByRole('button', { name: 'Close export', exact: true }).click();
     await page.evaluate(() => localStorage.clear());
     await page.reload();
     await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-    await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
     await expect(page.locator('.review-badge.accepted')).toHaveCount(2);
     await page.getByRole('button', { name: 'Export', exact: true }).click();
     await expect(page.locator('.export-location strong')).toContainText(path.basename(destination));
@@ -361,7 +386,7 @@ test('Settings owns appearance and locks unavailable Ollama tagging off with a w
 test('Photos is a macOS-only destination and submits selected or accepted originals through the native bridge', async () => {
   const platform = await desktop.evaluate(() => process.platform);
   await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-  await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   await expect(page.locator('.photo-card')).toHaveCount(3);
   await page.locator('.photo-card').first().click(); await page.keyboard.press('a');
   await page.getByRole('button', { name: 'Export', exact: true }).click();
@@ -444,7 +469,7 @@ test('indexed sessions confirm background labelling, report separate progress, a
     };
   });
   await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-  await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   await expect(page.locator('.photo-card')).toHaveCount(3);
   const indexing = page.getByRole('progressbar', { name: 'Indexing progress', exact: true });
   await expect(indexing).toHaveCount(0);
@@ -484,7 +509,7 @@ test('indexed sessions confirm background labelling, report separate progress, a
   await page.getByRole('button', { name: 'Close settings', exact: true }).click();
   await expect(page.locator('.activity-panel')).toContainText('finishing current photo');
   await desktop.evaluate(() => (globalThis as any).labellingTest.finish());
-  await expect(labelling).toHaveAttribute('value', '1');
+  await expect(labelling).toHaveCount(0);
   await expect(page.locator('.activity-panel')).toContainText('1 of 3 photos · stopped');
   expect(await desktop.evaluate(() => (globalThis as any).labellingTest.calls)).toBe(1);
   await page.locator('.photo-card').first().click();
@@ -505,7 +530,7 @@ test('an already enabled indexed session asks once before starting labelling', a
   });
   await page.evaluate(() => window.desktop!.setOllamaEnabled(true));
   await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-  await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   await expect(page.getByRole('alertdialog')).toContainText('Label this proofing session?');
   expect(await desktop.evaluate(() => Boolean((globalThis as any).unexpectedLabelling))).toBe(false);
   await page.keyboard.press('Escape');
@@ -536,7 +561,7 @@ test('indexing shows discovery and numeric progress, then disappears when comple
     };
   });
   await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-  await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   const bar = page.getByRole('progressbar', { name: 'Indexing progress', exact: true });
   await expect(bar).toBeVisible();
   expect(await bar.getAttribute('value')).toBeNull();
@@ -555,7 +580,7 @@ test('folder cache resets older schemas visibly, restores decisions and ignores 
   const cachePath = path.join(fixture, 'photo-proofing.json');
   await writeFile(cachePath, JSON.stringify({ schemaVersion: 0, files: {} }));
   await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-  await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   await expect(page.locator('.photo-card')).toHaveCount(3);
   await expect(page.locator('.cache-warning')).toContainText('reset');
   await page.locator('.photo-card').first().click(); await page.keyboard.press('a');
@@ -566,7 +591,7 @@ test('folder cache resets older schemas visibly, restores decisions and ignores 
   document.files['missing.JPG'] = document.files['TEST_1.JPG'];
   await writeFile(cachePath, JSON.stringify(document));
   await page.evaluate(() => localStorage.clear()); await page.reload();
-  await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   await expect(page.locator('.photo-card')).toHaveCount(3);
   await expect(page.locator('.review-badge.accepted')).toHaveCount(1);
   await expect(page.locator('.cache-warning')).toHaveCount(0);
@@ -601,7 +626,7 @@ test('light and dark palettes keep chrome neutral and state colors semantic', as
 
 test('A and D keep repeated statuses, S clears mixed selections, and decisions persist', async () => {
   await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-  await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   const cards = page.locator('.photo-card');
   await expect(cards).toHaveCount(3); await cards.first().click();
   await expect(page.locator('.selection-check')).toHaveCount(0);
@@ -620,7 +645,7 @@ test('A and D keep repeated statuses, S clears mixed selections, and decisions p
   await expect(page.locator('.review-badge.accepted')).toHaveCount(3);
   const cache = () => readFile(path.join(fixture, 'photo-proofing.json'), 'utf8').then(JSON.parse);
   await expect.poll(async () => Object.values((await cache()).files).filter((entry: any) => entry.review === 'accepted').length).toBe(4);
-  await page.reload(); await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.reload(); await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   await expect(page.locator('.review-badge.accepted')).toHaveCount(3);
   await cards.first().click(); await page.keyboard.press('d'); await page.keyboard.press('Meta+a');
   await page.keyboard.press('s'); await expect(page.locator('.review-badge')).toHaveCount(0);
@@ -633,13 +658,17 @@ test('About has offline software licenses, traps focus and opens from the native
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('© 2026 Juti Noppornpitak');
   await expect(dialog.locator('.about-version')).toContainText('Version');
-  await expect(dialog.locator('.software-credit')).not.toHaveCount(0);
+  const licenseControl = dialog.getByText('Apache License 2.0', { exact: true });
+  await expect(licenseControl).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Dependency licenses' })).toBeHidden();
+  await licenseControl.click();
+  await expect(dialog.getByRole('heading', { name: 'Dependency licenses' })).toBeVisible();
+  await expect(dialog.locator('pre')).toContainText('TERMS AND CONDITIONS');
+  await expect(dialog.getByRole('link')).toHaveCount(0);
   for (const [name, license] of [['electron', 'MIT'], ['sharp', 'Apache-2.0'], ['lucide', 'ISC'], ['ExifTool', 'Perl Artistic License'], ['systeminformation', 'MIT']]) {
     const credit = dialog.locator('.software-credit').filter({ has: page.locator('strong', { hasText: new RegExp(`^${name}$`) }) });
-    await expect(credit.locator('summary')).toContainText(license);
+    await expect(credit).toContainText(license);
   }
-  await dialog.locator('.software-credit').filter({ has: page.locator('strong', { hasText: /^lucide$/ }) }).locator('summary').click();
-  await expect(dialog.locator('pre').filter({ hasText: 'Permission to use, copy, modify' }).first()).toBeVisible();
   await expect(page.locator('.app-shell')).toHaveAttribute('inert', '');
   await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'About Photo Proofer', exact: true })).toBeFocused();
@@ -648,11 +677,10 @@ test('About has offline software licenses, traps focus and opens from the native
     item.click();
   });
   await expect(dialog).toBeVisible();
-  await dialog.locator('.chromium-credits>summary').click();
-  await expect(dialog.frameLocator('iframe').locator('body')).toContainText('Node.js is licensed');
+  await licenseControl.click();
   await page.screenshot({ path: 'test-results/about.png' });
   await page.getByRole('button', { name: 'Close About', exact: true }).focus();
-  await page.keyboard.press('Shift+Tab'); await expect(dialog.locator('iframe')).toBeFocused();
+  await page.keyboard.press('Shift+Tab'); await expect(dialog.locator('pre')).toBeFocused();
   await page.getByRole('button', { name: 'Close About', exact: true }).click();
   await expect(page.locator('.app-shell')).not.toHaveAttribute('inert', '');
 });
@@ -682,7 +710,7 @@ test('review filters update live and combine with media and filename searches', 
 
 test('cached labels autocomplete with keyboard or mouse and combine with review filters', async () => {
   await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-  await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   await expect(page.locator('.photo-card')).toHaveCount(3);
   const cachePath = path.join(fixture, 'photo-proofing.json');
   const cache = JSON.parse(await readFile(cachePath, 'utf8'));
@@ -690,7 +718,7 @@ test('cached labels autocomplete with keyboard or mouse and combine with review 
   cache.files['TEST_2.JPG'].tags = ['forest', 'portrait']; cache.files['TEST_2.JPG'].review = 'rejected';
   cache.files['TEST_3.JPG'].tags = ['city', 'landscape'];
   await writeFile(cachePath, JSON.stringify(cache));
-  await page.reload(); await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.reload(); await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   const input = page.getByRole('combobox', { name: 'Find a capture', exact: true });
   const cards = page.locator('.photo-card');
   await input.fill('FOR'); await expect(page.getByRole('option', { name: 'forest 2', exact: true })).toBeVisible();
@@ -743,7 +771,7 @@ test('viewer strip follows the current event while preserving sort and filters',
 
 test('strip badges and 50% rejection fade update everywhere, persist, and keep overnight events together', async () => {
   await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-  await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   const first = page.locator('.photo-card').first();
   await expect(page.locator('.photo-card')).toHaveCount(3); await first.click(); await page.keyboard.press('d');
   await expect(first.locator('img')).toHaveCSS('opacity', '0.5');
@@ -777,7 +805,7 @@ test('strip badges and 50% rejection fade update everywhere, persist, and keep o
   await page.keyboard.press('ArrowRight'); await expect(strip).toHaveCount(2);
   await page.keyboard.press('ArrowRight'); await expect(strip).toHaveCount(1);
   await expect(strip.locator('img')).toHaveAttribute('alt', 'TEST_3.JPG');
-  await page.reload(); await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.reload(); await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   await expect(first.locator('img')).toHaveCSS('opacity', '0.5');
   await first.click(); await page.keyboard.press('s');
   await expect(first.locator('img')).toHaveCSS('opacity', '1');
@@ -838,7 +866,8 @@ test('review bar previews and focuses the capture at its position in the current
   await expect(preview.locator('.review-badge.rejected')).toBeVisible();
   await expect(preview.locator('img')).not.toHaveJSProperty('naturalWidth', 0);
   await expect(page.locator('.detail-name h3')).toHaveText('DSC_2043.JPG');
-  const bounds = (await preview.boundingBox())!; expect(bounds.y + bounds.height).toBeLessThan((await bar.boundingBox())!.y);
+  const bounds = (await preview.boundingBox())!, barBounds = (await bar.boundingBox())!;
+  expect(bounds.y).toBeGreaterThan(barBounds.y + barBounds.height);
   let target = await point(8.5 / 12); await page.mouse.move(target.x, target.y);
   await expect(preview).toContainText('DSC_2049.JPG');
   await expect(page.locator('.detail-name h3')).toHaveText('DSC_2043.JPG');
@@ -893,7 +922,7 @@ test('event export includes hidden event captures and JSON with EXIF, labels and
   const destination = await mkdtemp(path.join(os.tmpdir(), 'photo-event-export-'));
   try {
     await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-    await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
     await expect(page.locator('.photo-card')).toHaveCount(3);
     await page.locator('.photo-card').nth(0).click(); await page.keyboard.press('a');
     await page.locator('.photo-card').nth(1).click(); await page.keyboard.press('d');
@@ -936,7 +965,7 @@ test('accepted exports receive Ollama summaries while selected and Event naming 
   const destination = await mkdtemp(path.join(os.tmpdir(), 'photo-summary-export-'));
   try {
     await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-    await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
     await expect(page.locator('.photo-card')).toHaveCount(3);
     await page.locator('.photo-card').first().click(); await page.keyboard.press('a');
     await page.locator('.photo-card').nth(2).click(); await page.keyboard.press('a');
@@ -1011,7 +1040,7 @@ test('background event summaries cover all photos, survive reload, and name diff
   try {
     await page.evaluate(() => window.desktop!.setOllamaEnabled(false));
     await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-    await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
     await expect(page.locator('.photo-card')).toHaveCount(3);
     await page.locator('.photo-card').first().click(); await page.keyboard.press('a');
     await page.locator('.photo-card').nth(1).click(); await page.keyboard.press('d');
@@ -1044,13 +1073,13 @@ test('background event summaries cover all photos, survive reload, and name diff
     await page.getByRole('button', { name: 'Close settings', exact: true }).click();
     await expect(page.locator('.event-link .event-summary')).toHaveText(['forest river walk', 'city park']);
     await expect(page.locator('.event-heading .event-summary')).toHaveText(['forest river walk', 'city park']);
-    await expect(page.getByRole('progressbar', { name: 'Events progress', exact: true })).toHaveAttribute('value', '2');
+    await expect(page.getByRole('progressbar', { name: /^(Events|Labelling) progress$/ })).toHaveCount(0);
     const generated = await desktop.evaluate(() => (globalThis as any).eventSummaryTest.summaries as any[][]);
     expect(generated.map(photos => photos.length)).toEqual([2, 1]);
     expect(generated[0].some(photo => photo.labels.includes('river'))).toBe(true);
     const cache = JSON.parse(await readFile(path.join(fixture, 'photo-proofing.json'), 'utf8'));
     expect(Object.values(cache.eventSummaries).sort()).toEqual(['city-park', 'forest-river-walk']);
-    await page.reload(); await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+    await page.reload(); await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
     await expect(page.locator('.event-link .event-summary')).toHaveText(['forest river walk', 'city park']);
     await expect(page.getByRole('alertdialog')).toHaveCount(0);
     expect(await desktop.evaluate(() => (globalThis as any).eventSummaryTest.summaries.length)).toBe(2);
@@ -1082,7 +1111,7 @@ test('event gap and bookmarks persist, regroup exports consistently, and handle 
   try {
     for (const file of ['TEST_1.JPG', 'TEST_2.JPG', 'TEST_3.JPG']) await copyFile(path.join(fixture, file), path.join(source, file));
     await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, source);
-    await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
     await expect(page.locator('.photo-card')).toHaveCount(3); await expect(page.locator('.event-section')).toHaveCount(2);
     await page.getByRole('button', { name: 'Bookmark this location', exact: true }).click();
     await expect(page.locator('.bookmark-row')).toHaveCount(1);
@@ -1127,7 +1156,7 @@ test('event gap and bookmarks persist, regroup exports consistently, and handle 
 
 test('reindex refreshes metadata and reruns enabled AI while preserving accepted and rejected decisions', async () => {
   await desktop.evaluate(async ({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, fixture);
-  await page.getByRole('button', { name: 'Open folder', exact: true }).click(); await expect(page.locator('.photo-card')).toHaveCount(3);
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click(); await expect(page.locator('.photo-card')).toHaveCount(3);
   await page.locator('.photo-card').first().click(); await page.keyboard.press('a'); await page.locator('.photo-card').nth(1).click(); await page.keyboard.press('d');
   await desktop.evaluate(async ({ app }) => {
     const load = process.getBuiltinModule('module').createRequire(`${app.getAppPath()}/package.json`), library = load('./dist-electron/electron/library.js'), native = load('./dist-electron/electron/ollama.js');
@@ -1161,7 +1190,7 @@ test('reindex refreshes metadata and reruns enabled AI while preserving accepted
   expect(cache.files['TEST_1.JPG'].review).toBe('accepted'); expect(cache.files['TEST_2.JPG'].review).toBe('rejected');
   await page.evaluate(() => window.desktop!.setOllamaEnabled(false));
   await page.getByRole('button', { name: 'Reindex & rerun AI', exact: true }).click();
-  await expect(page.locator('footer')).toContainText('Originals stay untouched');
+  await expect(page.locator('#indexing-progress')).toHaveCount(0);
   await expect(page.locator('.event-link .event-summary')).toHaveCount(0);
   const disabled = JSON.parse(await readFile(path.join(fixture, 'photo-proofing.json'), 'utf8'));
   expect(disabled.files['TEST_1.JPG'].tags).toBeUndefined(); expect(disabled.files['TEST_1.JPG'].review).toBe('accepted');
@@ -1186,7 +1215,7 @@ test('indexing and background AI errors show details without opening Settings an
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
   }, fixture);
   await page.evaluate(() => window.desktop!.setOllamaEnabled(false));
-  await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
   await expect(page.locator('.photo-card')).toHaveCount(3);
   await expect(page.locator('.cache-notices')).toContainText('TEST_2.JPG: Metadata unavailable: EXIF test failure <untrusted>');
   await page.evaluate(() => window.desktop!.setOllamaEnabled(true));
@@ -1226,9 +1255,9 @@ test('video-only events do not request summaries, prompt for AI work, or gain su
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
     }, source);
     await page.evaluate(() => window.desktop!.setOllamaEnabled(true));
-    await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
     await expect(page.locator('.photo-card')).toHaveCount(1);
-    await expect(page.locator('footer')).toContainText('Originals stay untouched');
+    await expect(page.locator('#indexing-progress')).toHaveCount(0);
     // Wait for the post-index cache/status load without relying on an arbitrary delay.
     await openSettings(); await page.getByRole('button', { name: 'Tag untagged photos', exact: true }).click();
     await expect(page.getByRole('alertdialog')).toHaveCount(0);
@@ -1247,4 +1276,160 @@ test('video-only events do not request summaries, prompt for AI work, or gain su
     expect(metadata.summary).toBeUndefined(); expect(metadata.summarySource).toBeUndefined();
     expect(await desktop.evaluate(() => (globalThis as any).videoSummaryCalls)).toBe(0);
   } finally { await rm(source, { recursive: true, force: true }); await rm(destination, { recursive: true, force: true }); }
+});
+
+test('finds near-duplicates within an event and selects the group for review', async () => {
+  await desktop.evaluate(({ dialog }, folder) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
+  }, fixture);
+  await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
+  await expect(page.locator('.photo-card')).toHaveCount(3);
+  await page.getByRole('button', { name: 'Find similar photos' }).click();
+  const similar = page.getByRole('dialog', { name: 'Similar photos' });
+  await expect(similar.getByText('2 similar captures')).toBeVisible();
+  await expect(similar.getByText('TEST_1.JPG', { exact: true })).toBeVisible();
+  await expect(similar.getByText('TEST_2.JPG', { exact: true })).toBeVisible();
+  await expect(similar.getByText('TEST_3.JPG', { exact: true })).toHaveCount(0);
+  await similar.getByRole('button', { name: 'Select group for review' }).click();
+  await expect(page.locator('.photo-card.is-selected')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Create panorama' })).toBeVisible();
+});
+
+test('fills the window, saves tone and LUT edits per version, and exports numbered copies', async () => {
+  const destination = await mkdtemp(path.join(os.tmpdir(), 'proof-edited-'));
+  const toneValues = [['Highlights', '-24'], ['Shadows', '30'], ['Brightness', '7'], ['Blacks', '-18']];
+  try {
+    await desktop.evaluate(({ dialog }, folder) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
+    }, fixture);
+    await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
+    await expect(page.locator('.photo-card')).toHaveCount(3);
+    await page.locator('.photo-card').first().dblclick();
+    await page.getByRole('button', { name: 'Edit JPEG' }).click();
+    const editor = page.getByRole('dialog', { name: 'Edit JPEG' });
+    expect(await editor.evaluate(element => {
+      const bounds = element.getBoundingClientRect();
+      return [bounds.x, bounds.y, bounds.width / innerWidth, bounds.height / innerHeight];
+    })).toEqual([0, 0, 1, 1]);
+    await editor.getByRole('button', { name: 'Rotate right 90°' }).click();
+    await editor.getByRole('button', { name: 'Save version', exact: true }).click();
+    await expect(editor.locator('.editor-status')).toContainText('Saved version 1');
+    await editor.getByRole('button', { name: 'Rotate left 90°' }).click();
+    await editor.getByLabel('Black and white').check();
+    for (const [name, value] of toneValues) {
+      await editor.getByRole('slider', { name, exact: true }).fill(value);
+    }
+    const lutFile = path.join(destination, 'Red.cube');
+    await writeFile(lutFile, 'LUT_3D_SIZE 2\n' + '1 0 0\n'.repeat(8));
+    await desktop.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] });
+    }, lutFile);
+    await editor.getByRole('button', { name: 'Choose LUT' }).click();
+    await expect(editor.locator('.editor-lut-name')).toHaveText('Red.cube');
+    await editor.getByLabel('Crop aspect').selectOption('1:1');
+    await expect(editor.locator('.editor-crop')).toBeVisible();
+    await editor.getByRole('button', { name: 'Save as new version' }).click();
+    await expect(editor.locator('.editor-status')).toContainText('Saved version 2');
+    const cache = JSON.parse(await readFile(path.join(fixture, 'photo-proofing.json'), 'utf8'));
+    expect(Object.keys(cache.luts)).toHaveLength(1);
+    await rm(lutFile);
+    await editor.getByRole('button', { name: 'Close', exact: true }).click();
+    const firstVersionIsPortrait = (image: HTMLImageElement) => image.naturalWidth > 0 && image.naturalHeight > image.naturalWidth;
+    const stripThumbnail = page.locator('.filmstrip-item.selected img');
+    await expect.poll(() => stripThumbnail.evaluate(firstVersionIsPortrait)).toBe(true);
+    await page.getByRole('button', { name: 'Reindex & rerun AI' }).click();
+    await expect(page.locator('.photo-card')).toHaveCount(3);
+    await expect.poll(() => page.locator('.photo-card').first().locator('img').evaluate(firstVersionIsPortrait)).toBe(true);
+    await page.locator('.photo-card').first().dblclick();
+    await page.getByRole('button', { name: 'Edit JPEG' }).click();
+    await expect(editor.getByRole('combobox', { name: 'Version', exact: true })).toHaveValue('2');
+    await expect(editor.getByLabel('Black and white')).toBeChecked();
+    for (const [name, value] of toneValues) await expect(editor.getByRole('slider', { name, exact: true })).toHaveValue(value);
+    await expect(editor.locator('.editor-lut-name')).toHaveText('Red.cube');
+    await editor.getByRole('combobox', { name: 'Version', exact: true }).selectOption('1');
+    await expect(editor.getByLabel('Black and white')).not.toBeChecked();
+    await expect(editor.getByRole('slider', { name: 'Highlights', exact: true })).toHaveValue('0');
+    await expect(editor.locator('.editor-lut-name')).toHaveText('No LUT applied');
+    await desktop.evaluate(({ dialog }, folder) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
+    }, destination);
+    await editor.getByRole('button', { name: 'Choose folder' }).click();
+    await editor.getByLabel('Export all saved versions').check();
+    await editor.getByLabel('Text watermark').fill('Photo Proofer');
+    await editor.getByLabel('Bottom-right caption').selectOption('automatic');
+    await editor.getByLabel('Name override').fill('Sample photographer');
+    await editor.getByRole('button', { name: 'Export JPEG', exact: true }).click();
+    await expect(editor.locator('.editor-status')).toContainText('Exported 2 of 2 JPEGs', { timeout: 25000 });
+    const sharp = (await import('sharp')).default;
+    const normal = await sharp(path.join(destination, 'TEST_1 (v1).JPG')).metadata();
+    const graded = sharp(path.join(destination, 'TEST_1 (v2).JPG'));
+    const cropped = await graded.metadata();
+    expect(normal.width).not.toBe(normal.height);
+    expect(Math.abs(cropped.width - cropped.height)).toBeLessThanOrEqual(1);
+    const { channels } = await graded.stats();
+    expect(channels[0].mean).toBeGreaterThan(channels[1].mean + 150);
+    expect(hash(await readFile(path.join(fixture, 'TEST_1.JPG')))).toBe(originalHash);
+    await page.screenshot({ path: 'test-results/jpeg-editor.png' });
+    await editor.getByRole('button', { name: 'Rotate left 90°' }).click();
+    await editor.getByRole('button', { name: 'Save version', exact: true }).click();
+    await expect(editor.locator('.editor-status')).toContainText('Saved version 1');
+    await editor.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect.poll(() => stripThumbnail.evaluate((image: HTMLImageElement) => image.naturalWidth > image.naturalHeight)).toBe(true);
+  } finally { await rm(destination, { recursive: true, force: true }); }
+});
+
+test('develops sensor data from a paired RAW and preserves portrait thumbnails and originals', async () => {
+  const source = await mkdtemp(path.join(os.tmpdir(), 'proof-sensor-'));
+  const destination = await mkdtemp(path.join(os.tmpdir(), 'proof-sensor-export-'));
+  try {
+    const bytes = sensorDng();
+    const raw = path.join(source, 'SENSOR.DNG');
+    await writeFile(raw, bytes);
+    await copyFile(path.join(fixture, 'TEST_1.JPG'), path.join(source, 'SENSOR.JPG'));
+    await desktop.evaluate(({ dialog }, folder) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
+    }, source);
+    await page.locator('.sidebar').getByRole('button', { name: 'Open a card or folder', exact: true }).click();
+    await expect(page.locator('.photo-card')).toHaveCount(1);
+    await page.locator('.photo-card').click();
+    await page.keyboard.press('t');
+    const thumbnail = page.locator('.photo-card img');
+    await expect(thumbnail).toHaveJSProperty('naturalWidth', 192);
+    await expect(thumbnail).toHaveJSProperty('naturalHeight', 320);
+    await expect(thumbnail).toHaveCSS('object-fit', 'contain');
+    await page.getByRole('button', { name: 'Edit RAW', exact: true }).click();
+    const editor = page.getByRole('dialog', { name: 'Edit RAW', exact: true });
+    await expect(editor.getByRole('combobox', { name: 'RAW white balance' })).toHaveValue('as-shot');
+    await expect(editor.getByRole('img', { name: 'Adjustment preview' })).toHaveJSProperty('naturalWidth', 192);
+    await editor.getByRole('button', { name: 'Save version', exact: true }).click();
+    await expect(editor.locator('.editor-status')).toContainText('Saved version 1');
+    await editor.locator('input[name="exposure"]').evaluate((slider: HTMLInputElement) => {
+      slider.value = '1';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await editor.getByRole('slider', { name: 'Brightness', exact: true }).fill('5');
+    await editor.getByRole('button', { name: 'Save as new version' }).click();
+    await expect(editor.locator('.editor-status')).toContainText('Saved version 2');
+    await desktop.evaluate(({ dialog }, folder) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
+    }, destination);
+    await editor.getByRole('button', { name: 'Choose folder' }).click();
+    await editor.getByLabel('Export all saved versions').check();
+    await editor.getByRole('button', { name: 'Export JPEG', exact: true }).click();
+    await expect(editor.locator('.editor-status')).toContainText('Exported 2 of 2 JPEGs');
+    const sharp = (await import('sharp')).default;
+    const first = sharp(path.join(destination, 'SENSOR (v1).JPG'));
+    const second = sharp(path.join(destination, 'SENSOR (v2).JPG'));
+    expect(await first.metadata()).toMatchObject({ width: 192, height: 320, format: 'jpeg' });
+    expect((await second.stats()).channels[0].mean).toBeGreaterThan((await first.stats()).channels[0].mean + 10);
+    expect(await readFile(raw)).toEqual(bytes);
+    await editor.getByRole('button', { name: 'Close', exact: true }).click();
+    await page.keyboard.press('t');
+    await expect(page.locator('.photo-card img')).toHaveJSProperty('naturalWidth', 192);
+    await page.getByRole('button', { name: 'Edit JPEG', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Edit JPEG' }).getByRole('combobox', { name: 'Version', exact: true })).toHaveValue('');
+  } finally {
+    await rm(source, { recursive: true, force: true });
+    await rm(destination, { recursive: true, force: true });
+  }
 });

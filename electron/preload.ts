@@ -1,6 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopAPI, ScanProgress, ExportProgress, TagProgress, SessionWarning, EventSummaryUpdate } from '../shared/model';
 const api: DesktopAPI = {
+  exportPanorama: ids => ipcRenderer.invoke('export-panorama', ids),
+  findSimilar: () => ipcRenderer.invoke('find-similar'),
+  getEditVersions: id => ipcRenderer.invoke('get-edit-versions', id),
+  chooseEditLut: id => ipcRenderer.invoke('choose-edit-lut', id),
+  previewEdits: (id, edits) => ipcRenderer.invoke('preview-edits', id, edits),
+  saveEditVersion: (id, edits, version) => ipcRenderer.invoke('save-edit-version', id, edits, version),
+  exportEditVersions: (id, versions, options) => ipcRenderer.invoke('export-edit-versions', id, versions, options),
   getLibrarySettings: () => ipcRenderer.invoke('get-library-settings'),
   setEventGap: minutes => ipcRenderer.invoke('set-event-gap', minutes),
   toggleBookmark: folder => ipcRenderer.invoke('toggle-bookmark', folder),

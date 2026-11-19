@@ -5,3 +5,9 @@ Licensed under the Apache License, Version 2.0.
 
 Third-party dependencies and sample photographs retain their respective
 copyrights and licenses. Sample photograph credits are listed in README.md.
+
+The bundled LibRaw WebAssembly component includes LibRaw under the CDDL 1.0
+option, and the WebAssembly bindings under the MIT license. Copyright and
+license texts are included in the packaged software license manifest.
+The corresponding source and build instructions are available at:
+https://github.com/colorhythm/libraw-wasm/tree/9b0f59a5e0f6d3d12a8f6fa594015ef4f30a6e95

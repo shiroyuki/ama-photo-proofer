@@ -1,7 +1,7 @@
 interface Options {
   enabled(): boolean;
   selection(): Set<string>;
-  update(ids: Set<string>): void;
+  update(ids: Set<string>, finished: boolean): void;
 }
 export function installMarquee(root: HTMLElement, options: Options) {
   let suppressClick = false;
@@ -10,7 +10,7 @@ export function installMarquee(root: HTMLElement, options: Options) {
     startX: number; startY: number; base: Set<string>; additive: boolean; active: boolean; box?: HTMLElement; items?: { id: string; x: number; y: number; width: number; height: number }[];
   } | undefined;
   let frame = 0;
-  const update = () => {
+  const update = (finished = false) => {
     if (!session?.active) return;
     const { gallery } = session;
     const bounds = gallery.getBoundingClientRect();
@@ -23,7 +23,7 @@ export function installMarquee(root: HTMLElement, options: Options) {
     for (const item of session.items ?? []) {
       if (item.x < right && item.x + item.width > left && item.y < bottom && item.y + item.height > top) ids.add(item.id);
     }
-    options.update(ids);
+    options.update(ids, finished);
   };
   const scroll = () => {
     if (!session?.active) return;
@@ -66,7 +66,7 @@ export function installMarquee(root: HTMLElement, options: Options) {
   const finish = (event: PointerEvent) => {
     if (!session || event.pointerId !== session.pointer) return;
     if (session.active) {
-      if (event.type === 'pointercancel') options.update(session.base); else update();
+      if (event.type === 'pointercancel') options.update(session.base, true); else update(true);
       suppressClick = true;
       setTimeout(() => { suppressClick = false; }, 0);
       session.box?.remove(); session.gallery.classList.remove('is-selecting');

@@ -27,6 +27,9 @@ function visit(name, parent, optional = false) {
   const license = typeof pkg.license === 'string' ? pkg.license : pkg.license?.type || pkg.licenses?.map(item => item.type).join(' OR ') || 'See included license notices';
   const notices = licenseFiles(folder);
   entries.push({ name: pkg.name, version: pkg.version, license, notices });
+  if (pkg.name === '@colorhythm/libraw-wasm') {
+    entries.push({ name: 'LibRaw', version: 'Bundled with ' + pkg.version, license: 'CDDL-1.0 OR LGPL-2.1-only', notices: licenseFiles(path.join(folder, 'LibRaw')) });
+  }
   if (pkg.name === 'electron') return; // Its npm installer is not part of the running application.
   if (pkg.name.startsWith('exiftool-vendored.')) {
     entries.push({ name: 'ExifTool', version: pkg.version, license: 'Perl Artistic License OR GNU GPL (same terms as Perl)', notices: fs.existsSync(path.join(folder, 'bin', 'LICENSE')) ? licenseFiles(path.join(folder, 'bin')) : notices });
@@ -62,6 +65,9 @@ const chromium = fs.readFileSync(path.join(electronDist, 'LICENSES.chromium.html
   .replace(/<link[^>]+chrome:[^>]*>/g, '')
   .replace('</head>', '<style>body{font:13px system-ui,sans-serif;line-height:1.6;margin:16px;background:#fff;color:#252525}a{color:#175bcc}.product{border-top:1px solid #dedede;padding:16px 0}.title{font-weight:600}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:11px ui-monospace,monospace}.show,.show-all,#print-link{display:none}</style></head>');
 fs.writeFileSync(path.join(output, 'chromium.html'), chromium);
+if (fs.existsSync(path.join(root, 'public/fonts/Inter-LICENSE.txt'))) entries.push({ name: 'Inter', version: '4.1', license: 'OFL-1.1', notices: [
+  { name: 'Inter-LICENSE.txt', text: fs.readFileSync(path.join(root, 'public/fonts/Inter-LICENSE.txt'), 'utf8') },
+] });
 const manifest = {
   version: app.version,
   appLicense: fs.readFileSync(path.join(root, 'LICENSE'), 'utf8'),
